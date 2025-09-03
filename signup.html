@@ -1,0 +1,16 @@
+<!doctype html><html lang="ko"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>회원가입</title></head><body>
+<h1>회원가입</h1>
+<p>Google로 가입하며, 닉네임은 <b>최초 1회만</b> 설정되고 이후 변경할 수 없습니다.</p>
+<button id="btn">Google로 시작</button>
+<p><a href="signin.html">이미 계정이 있으신가요? 로그인</a></p>
+<script type="module">
+  import './js/firebase-init.js';
+  import { signInWithGoogleAndClaimNick } from './js/auth.js';
+  document.getElementById('btn').addEventListener('click', async ()=>{
+    try{ await signInWithGoogleAndClaimNick(); location.href='index.html'; }
+    catch(e){ alert(e.message); }
+  });
+</script>
+</body></html>
