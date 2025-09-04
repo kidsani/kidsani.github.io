@@ -1,16 +1,187 @@
-<!doctype html><html lang="ko"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>회원가입</title></head><body>
-<h1>회원가입</h1>
-<p>Google로 가입하며, 닉네임은 <b>최초 1회만</b> 설정되고 이후 변경할 수 없습니다.</p>
-<button id="btn">Google로 시작</button>
-<p><a href="signin.html">이미 계정이 있으신가요? 로그인</a></p>
-<script type="module">
-  import './js/firebase-init.js';
-  import { signInWithGoogleAndClaimNick } from './js/auth.js';
-  document.getElementById('btn').addEventListener('click', async ()=>{
-    try{ await signInWithGoogleAndClaimNick(); location.href='index.html'; }
-    catch(e){ alert(e.message); }
-  });
-</script>
-</body></html>
+<!-- ---------- signup.html (v0.1.0) ---------- -->
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>회원가입 | KidsAni</title>
+  <meta name="color-scheme" content="dark" />
+  <style>
+    :root{
+      --bg:#000;
+      --panel:#111;
+      --text:#fafafa;
+      --muted:#bdbdbd;
+      --accent:#a78bfa; /* 보라 */
+      --accent-strong:#8b5cf6;
+      --danger:#ff6b6b;
+      --maxw-m: 460px;
+      --maxw-t: 680px;
+      --radius: 16px;
+      --pad: 18px;
+      --pad-lg: 24px;
+      --gap: 14px;
+      --font-big: clamp(22px, 4.5vw, 28px);
+      --font-mid: clamp(16px, 3.5vw, 18px);
+      --font-small: clamp(13px, 2.8vw, 14px);
+      --btn-height: 54px;
+    }
+    *{ box-sizing:border-box; }
+    html,body{ height:100%; background:var(--bg); color:var(--text); margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", Apple SD Gothic Neo, "Malgun Gothic", sans-serif; }
+
+    .wrap{ min-height:100%; display:grid; place-items:center; padding:24px 14px; }
+    .card{
+      width:100%; max-width: var(--maxw-m);
+      background: linear-gradient(180deg, #121212, #0d0d0d);
+      border:1px solid #1d1d1d; border-radius: var(--radius);
+      padding: var(--pad-lg);
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+    @media (min-width:640px){ .card{ max-width: var(--maxw-t); } }
+
+    .brand{ display:flex; align-items:center; gap:12px; margin-bottom: 14px; }
+    .brand .logo{
+      width:42px; height:42px; border-radius:12px;
+      background: radial-gradient(circle at 35% 35%, #fff 0 25%, #e2e2e2 26% 40%, #111 41% 100%);
+      box-shadow: inset 0 0 18px rgba(255,255,255,.15), 0 4px 10px rgba(0,0,0,.4);
+    }
+    .brand h1{ font-size: var(--font-big); margin:0; letter-spacing:.3px; }
+    .sub{ color:var(--muted); font-size: var(--font-small); margin: 2px 0 14px; }
+
+    .field{ display:grid; gap:8px; margin:12px 0; }
+    label{ font-size: var(--font-small); color:#d0d0d0; }
+    input, button{ font-size: var(--font-mid); }
+    input{
+      background:#0b0b0b; color:var(--text);
+      border:1px solid #262626; border-radius: 12px;
+      padding: 14px 16px; outline:none;
+    }
+    input:focus{ border-color: var(--accent); box-shadow: 0 0 0 3px rgba(167,139,250,.15); }
+
+    .btn{
+      width:100%; height: var(--btn-height); border:0; border-radius:14px;
+      font-weight:700; letter-spacing:.2px; cursor:pointer;
+      transition: transform .02s ease, filter .2s ease;
+      display:inline-flex; align-items:center; justify-content:center;
+    }
+    .btn:active{ transform: translateY(1px); }
+    .btn-primary{ background: linear-gradient(180deg, var(--accent), var(--accent-strong)); color:#120b1f; text-shadow: 0 1px 0 rgba(255,255,255,.12); }
+    .btn-ghost{ background:#101010; color:#eaeaea; border:1px solid #222; }
+    .row{ display:grid; gap:10px; margin-top:12px; }
+    .help{ text-align:center; color:var(--muted); font-size: var(--font-small); margin-top:12px; }
+
+    .msg{ margin-top:10px; padding:10px 12px; border-radius:12px; font-size: var(--font-small); display:none; }
+    .msg.show{ display:block; }
+    .msg.ok{ background:#0f1a08; color:#caffb5; border:1px solid #224a1b; }
+    .msg.err{ background:#2a0e10; color:#ffc9c9; border:1px solid #5d1f25; }
+
+    .consent{
+      margin-top: 10px; font-size: var(--font-small);
+      color:#d6d6d6; display:flex; gap:8px; align-items:flex-start;
+    }
+    .consent input{ width:18px; height:18px; margin-top:2px; }
+    .safe-note{
+      margin-top: 14px; font-size: var(--font-small);
+      color:#e9d5ff; background:#120d1f; border:1px solid #2a1857;
+      padding:10px 12px; border-radius:12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <main class="card" role="main" aria-labelledby="title">
+      <div class="brand" aria-hidden="true">
+        <div class="logo" role="img" aria-label="KidsAni 로고 (젤리 발바닥 느낌)"></div>
+        <h1 id="title">처음 오셨군요! 함께 시작해요</h1>
+      </div>
+      <p class="sub">쉬운 문장과 큰 버튼으로, 아이들도 혼자서 할 수 있어요 😊</p>
+
+      <form id="formSignUp" autocomplete="on" novalidate>
+        <div class="field">
+          <label for="email">이메일</label>
+          <input id="email" name="email" type="email" inputmode="email" placeholder="you@example.com" required aria-required="true" />
+        </div>
+        <div class="field">
+          <label for="pw">비밀번호 (6자 이상)</label>
+          <input id="pw" name="pw" type="password" placeholder="●●●●●●●●" required aria-required="true" minlength="6" />
+        </div>
+        <div class="consent">
+          <input type="checkbox" id="agree" required aria-required="true" />
+          <label for="agree">안전하게 쓰기 약속에 동의해요. (보호자/선생님과 함께해요)</label>
+        </div>
+
+        <div class="row">
+          <button class="btn btn-primary" type="submit" id="btnJoin">가입하기</button>
+          <button class="btn btn-ghost" type="button" id="btnGoogle" aria-label="구글로 회원가입">Google로 가입</button>
+        </div>
+        <div id="msg" class="msg" role="status" aria-live="polite"></div>
+      </form>
+
+      <p class="help">이미 계정이 있나요? <a href="signin.html">로그인 하기</a></p>
+
+      <div class="safe-note">
+        <strong>안전 약속:</strong> 쉬운 비밀번호(생일, 1234 등)는 쓰지 않아요. 가족과 선생님만 내 계정을 도와줄 수 있어요.
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { auth } from './js/firebase-init.js';
+    import {
+      createUserWithEmailAndPassword,
+      GoogleAuthProvider,
+      signInWithPopup
+    } from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js';
+
+    const $ = s => document.querySelector(s);
+    const form = $('#formSignUp');
+    const msg  = $('#msg');
+    const btnGoogle = $('#btnGoogle');
+
+    function showMsg(text, ok=false){
+      msg.textContent = text;
+      msg.className = 'msg show ' + (ok ? 'ok':'err');
+    }
+
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const email = $('#email').value.trim();
+      const pw    = $('#pw').value;
+      const agree = $('#agree').checked;
+
+      if(!email || !pw){ return showMsg('이메일과 비밀번호를 입력해 주세요.'); }
+      if(pw.length < 6){ return showMsg('비밀번호는 6자 이상으로 만들어 주세요.'); }
+      if(!agree){ return showMsg('안전하게 쓰기 약속에 동의해 주세요.'); }
+
+      try{
+        await createUserWithEmailAndPassword(auth, email, pw);
+        showMsg('가입이 완료되었어요! 로그인 화면으로 이동합니다…', true);
+        setTimeout(()=> location.href = 'signin.html', 500);
+      }catch(err){
+        const code = err?.code || '';
+        const map = {
+          'auth/email-already-in-use':'이미 사용 중인 이메일이에요.',
+          'auth/invalid-email':'이메일 주소를 확인해 주세요.',
+          'auth/operation-not-allowed':'해당 가입 방법을 사용할 수 없어요(관리자 설정).',
+          'auth/weak-password':'비밀번호를 더 안전하게 만들어 주세요.'
+        };
+        showMsg(map[code] || `가입에 실패했어요 (${code || '알 수 없는 오류'})`);
+        console.error(err);
+      }
+    });
+
+    btnGoogle.addEventListener('click', async ()=>{
+      try{
+        const provider = new GoogleAuthProvider();
+        await signInWithPopup(auth, provider); // Google 가입(최초 로그인 시 계정 생성)
+        showMsg('구글로 가입 완료! 바로 시작할게요…', true);
+        setTimeout(()=> location.href = 'index.html', 400);
+      }catch(err){
+        showMsg('구글 가입/로그인에 실패했어요. 잠시 후 다시 시도해 주세요.');
+        console.error(err);
+      }
+    });
+  </script>
+</body>
+</html>
+<!-- ---------- end of signup.html (v0.1.0) ---------- -->
