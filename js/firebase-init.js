@@ -1,25 +1,22 @@
-// Firebase v10+ (modular)
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-import {
-  getAuth, setPersistence, browserLocalPersistence, GoogleAuthProvider
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+// /js/firebase-init.js  (v1.5.1)
+import { initializeApp }   from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js';
+import { getAuth }         from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js';
+import { getFirestore }    from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
 
-// ↓ 콘솔에서 발급된 값으로 교체
+// ✅ kidsani 프로젝트용 설정
 export const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "XXXX",
-  appId: "1:XXXX:web:YYYY"
+  apiKey: "AIzaSyAhBvRE0D2Vkg4m800kkTaFi360Y4_4nLc",  // 주신 웹 API 키
+  authDomain: "kidsani.firebaseapp.com",
+  projectId: "kidsani",
+  storageBucket: "kidsani.appspot.com",
+  // messagingSenderId / appId 는 없어도 Auth/Firestore 동작합니다. 
+  // (콘솔 스니펫의 값이 있으면 추가로 넣어도 됩니다)
 };
 
-export const app = initializeApp(firebaseConfig);
+// 앱/서비스 인스턴스
+export const app  = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db   = getFirestore(app);
-export const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({ prompt: "select_account" });
 
-// 로그인 지속성(로컬) — 굳이 await 필요 없음
-setPersistence(auth, browserLocalPersistence).catch(console.error);
+// 디버그(필요 시)
+// console.log('CONFIG', firebaseConfig);
