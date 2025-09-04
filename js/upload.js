@@ -1,11 +1,16 @@
-// js/upload.js (v1.7.1-xss-safe)
-// - XSS 방어: 카테고리 렌더에서 innerHTML 미사용(모두 createElement/textContent)
-// - 개인 라벨 추가 방어: 길이/문자 제한 + DOM 주입 차단
-// - URL 화이트리스트(YouTube/https만) — javascript:, data: 등 차단
-// - 기존 기능/UX, Firestore 스키마(uid) 그대로 유지
+// js/upload.js (v1.8.0-series)
+// - UI 변경 없음. 로직만 추가.
+// - "시리즈" 그룹에서 카테고리 1개를 선택하면 시리즈 업로드 모드가 자동 활성화됩니다.
+// - 현재 해당 시리즈의 마지막 episode를 읽어와 그 다음 번호부터 순차 부여(여러 URL 일괄 등록 지원).
+// - personal 과의 혼합, 일반 카테고리와의 혼합을 금지(기존 정책 유지).
+// - Firestore 인덱스: seriesKey ==, orderBy(episode desc) 쿼리에 대해 콘솔에서 안내 뜨면 한 번 생성 필요.
+
 import { auth, db } from './firebase-init.js?v=1.5.1';
 import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=1.5.1';
-import { addDoc, collection, serverTimestamp } from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
+import {
+  addDoc, collection, serverTimestamp,
+  getDocs, query, where, orderBy, limit
+} from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
 import { CATEGORY_GROUPS } from './categories.js?v=1.5.1';
 
 /* ------- 전역 내비 중복 방지 ------- */
@@ -47,7 +52,7 @@ btnSignOut  ?.addEventListener('click', async ()=>{ await fbSignOut(auth); close
 /* ------- 공통 키 ------- */
 const GROUP_ORDER_KEY      = 'groupOrderV1';
 const PERSONAL_LABELS_KEY  = 'personalLabels';
-const isPersonal = (v)=> v==='personal1' || v==='personal2';
+const isPersonalVal = (v)=> v==='personal1' || v==='personal2';
 
 /* ------- 메시지 ------- */
 const msgTop = $('#msgTop');
@@ -60,12 +65,27 @@ function getPersonalLabels(){
 }
 function setPersonalLabel(key,label){
   let s = String(label||'').replace(/\r\n?/g,'\n').trim();
-  // 길이, 금지문자(꺾쇠/따옴표) 제거 — 추가 방어
   s = s.slice(0,12).replace(/[<>"]/g,'').replace(/[\u0000-\u001F]/g,'');
   const map = getPersonalLabels();
   map[key] = s;
   localStorage.setItem(PERSONAL_LABELS_KEY, JSON.stringify(map));
 }
+
+/* ------- 그룹/라벨 맵 (시리즈 판단용) ------- */
+const SERIES_SET = new Set();
+const LABEL_MAP  = new Map(); // value -> label
+(function buildMaps(){
+  try{
+    CATEGORY_GROUPS.forEach(g=>{
+      g.children.forEach(c=>{
+        LABEL_MAP.set(c.value, c.label||c.value);
+        if (g.key === 'series') SERIES_SET.add(c.value);
+      });
+    });
+  }catch{}
+})();
+const isSeriesVal = (v)=> SERIES_SET.has(v);
+const labelOf = (v)=> LABEL_MAP.get(v)||v;
 
 /* ------- 그룹 순서 적용 ------- */
 function applyGroupOrder(groups){
@@ -78,7 +98,7 @@ function applyGroupOrder(groups){
   return sorted;
 }
 
-/* ------- 카테고리 렌더 (XSS-safe: DOM API만 사용) ------- */
+/* ------- 카테고리 렌더 (XSS-safe) ------- */
 const catsBox = $('#cats');
 
 function renderCats(){
@@ -95,9 +115,7 @@ function renderCats(){
   const personalLabels = getPersonalLabels();
   const groups = applyGroupOrder(CATEGORY_GROUPS);
 
-  // 기존 innerHTML 사용 → 모두 제거
-  catsBox.replaceChildren(); // 안전하게 초기화
-
+  catsBox.replaceChildren();
   const frag = document.createDocumentFragment();
 
   for (const g of groups){
@@ -129,7 +147,6 @@ function renderCats(){
       input.value = c.value;
 
       const text = document.createTextNode(' ' + (g.key==='personal' && personalLabels[c.value] ? personalLabels[c.value] : c.label));
-
       label.appendChild(input);
       label.appendChild(text);
 
@@ -147,7 +164,6 @@ function renderCats(){
           setPersonalLabel(key, name);
           renderCats();
         });
-        // 공백 추가
         label.appendChild(document.createTextNode(' '));
         label.appendChild(btn);
       }
@@ -159,7 +175,6 @@ function renderCats(){
       const note = document.createElement('div');
       note.className = 'muted';
       note.style.margin = '6px 4px 2px';
-      // 텍스트만
       note.textContent = '개인자료는 단독 등록/재생만 가능합니다.';
       fieldset.appendChild(note);
     }
@@ -169,20 +184,39 @@ function renderCats(){
 
   catsBox.appendChild(frag);
 
-  // 선택 제약
+  // 선택 제약: personal/series는 "단독 모드"
   catsBox.querySelectorAll('input.cat').forEach(chk=>{
     chk.addEventListener('change', ()=>{
       const v = chk.value;
-      if(isPersonal(v) && chk.checked){
+
+      // 1) personal 선택 시: 나머지 모두 해제
+      if (isPersonalVal(v) && chk.checked){
         catsBox.querySelectorAll('input.cat').forEach(x=>{ if(x!==chk) x.checked=false; });
         setMsg('개인자료는 단독으로만 등록/재생됩니다.');
         return;
       }
-      if(!isPersonal(v) && chk.checked){
-        catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked').forEach(x=> x.checked=false);
+
+      // 2) series 선택 시: 시리즈 1개만 허용, 나머지 전부 해제
+      if (isSeriesVal(v) && chk.checked){
+        catsBox.querySelectorAll('input.cat').forEach(x=>{
+          if (x!==chk) x.checked = false; // 시리즈는 단독
+        });
+        setMsg('시리즈는 단독으로만 등록됩니다.');
+        return;
+      }
+
+      // 3) 일반 카테고리 선택 시: personal/series는 해제 + 일반은 최대 3개 제한
+      if (!isPersonalVal(v) && !isSeriesVal(v) && chk.checked){
+        catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked, .group[data-key="series"] input.cat:checked')
+          .forEach(x=> x.checked=false);
+
         const normals = Array.from(catsBox.querySelectorAll('input.cat:checked'))
-          .map(x=>x.value).filter(x=>!isPersonal(x));
-        if(normals.length>3){ chk.checked=false; setMsg('카테고리는 최대 3개까지 선택 가능합니다.'); return; }
+          .map(x=>x.value).filter(x=> !isPersonalVal(x) && !isSeriesVal(x));
+        if (normals.length>3){
+          chk.checked=false;
+          setMsg('카테고리는 최대 3개까지 선택 가능합니다.');
+          return;
+        }
       }
       setMsg('');
     });
@@ -190,15 +224,13 @@ function renderCats(){
 }
 renderCats();
 
-/* ------- URL 유틸 ------- */
+/* ------- URL 유틸/화이트리스트 ------- */
 const urlsBox = $('#urls');
 function parseUrls(){ return urlsBox.value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean); }
 function extractId(url){ const m=String(url).match(/(?:youtu\.be\/|v=|shorts\/|embed\/)([^?&/]+)/); return m?m[1]:''; }
-
-// (XSS/악성 URL 방지) — https + YouTube만 허용
 const YT_WHITELIST = /^(https:\/\/(www\.)?youtube\.com\/(watch\?v=|shorts\/)|https:\/\/youtu\.be\/)/i;
 
-/* ------- 제목 가져오기: oEmbed ------- */
+/* ------- 제목 가져오기(oEmbed) ------- */
 async function fetchTitleById(id){
   if(!id) return '';
   try{
@@ -224,6 +256,30 @@ $('#btnPaste')?.addEventListener('click', async ()=>{
 /* ------- 등록 ------- */
 function getOrderValue(){ return document.querySelector('input[name="order"]:checked')?.value || 'bottom'; }
 
+async function getNextEpisodeStart(seriesKey){
+  // 기본값: 1부터
+  let start = 1;
+  try{
+    const qs = await getDocs(
+      query(
+        collection(db,'videos'),
+        where('seriesKey','==', seriesKey),
+        orderBy('episode','desc'),
+        limit(1)
+      )
+    );
+    if (!qs.empty){
+      const last = Number(qs.docs[0].data()?.episode) || 0;
+      start = last + 1;
+    }
+  }catch(e){
+    // 인덱스 없으면 콘솔 링크(Firestore가 자동 안내)로 한 번 생성해 주면 OK.
+    console.warn('[upload.series] getNextEpisodeStart failed (index needed?)', e?.code, e?.message);
+    setMsg('시리즈 인덱스가 필요할 수 있어요. 콘솔 링크로 인덱스를 한 번 생성해 주세요.');
+  }
+  return start;
+}
+
 async function submitAll(){
   setMsg('검사 중...');
   const user = auth.currentUser;
@@ -233,37 +289,86 @@ async function submitAll(){
   if(!lines.length){ setMsg('URL을 한 줄에 하나씩 입력해 주세요.'); return; }
 
   const selected = Array.from(document.querySelectorAll('.cat:checked')).map(c=>c.value);
-  if(!selected.length){ setMsg('카테고리를 최소 1개 선택해 주세요.'); return; }
 
-  const personals = selected.filter(isPersonal);
-  const normals   = selected.filter(v=> !isPersonal(v));
+  const personals = selected.filter(isPersonalVal);
+  const seriesSel = selected.filter(isSeriesVal);
+  const normals   = selected.filter(v=> !isPersonalVal(v) && !isSeriesVal(v));
 
-  // A) 개인자료 단독 → 로컬 저장
-  if(personals.length===1 && normals.length===0){
-    const slot = personals[0]; // 'personal1' | 'personal2'
+  // A) 개인자료 단독(로컬 저장)
+  if (personals.length===1 && seriesSel.length===0 && normals.length===0){
+    const slot = personals[0];
     const key  = `copytube_${slot}`;
     let arr=[]; try{ arr=JSON.parse(localStorage.getItem(key)||'[]'); }catch{ arr=[]; }
     let added=0;
     for(const raw of lines){
-      if(!YT_WHITELIST.test(raw)) { continue; } // 안전하지 않은 URL 차단
+      if(!YT_WHITELIST.test(raw)) continue;
       if(!extractId(raw)) continue;
       arr.push({ url: raw, savedAt: Date.now() });
       added++;
     }
     localStorage.setItem(key, JSON.stringify(arr));
-    urlsBox.value='';
-    document.querySelectorAll('.cat:checked').forEach(c=> c.checked=false);
+    urlsBox.value=''; document.querySelectorAll('.cat:checked').forEach(c=> c.checked=false);
     setMsg(`로컬 저장 완료: ${added}건 (${slot==='personal1'?'개인자료1':'개인자료2'})`);
     return;
   }
 
   // 혼합 금지
-  if(personals.length>=1 && normals.length>=1){
-    setMsg('개인자료는 다른 카테고리와 함께 선택할 수 없습니다.');
+  if (seriesSel.length>=1 && (personals.length>=1 || normals.length>=1)){
+    setMsg('시리즈는 다른 카테고리/개인자료와 함께 선택할 수 없습니다.');
     return;
   }
 
-  // B) 일반 카테고리 → Firestore
+  // B) 시리즈 단독 업로드
+  if (seriesSel.length===1 && personals.length===0 && normals.length===0){
+    const seriesKey   = seriesSel[0];
+    const seriesTitle = labelOf(seriesKey);
+    const order       = getOrderValue();
+    const list        = (order==='bottom') ? lines.slice().reverse() : lines.slice();
+
+    setMsg('시리즈 시작 번호 확인 중...');
+    let nextEp = await getNextEpisodeStart(seriesKey);
+
+    setMsg(`등록 중... (0/${list.length})`);
+    let ok=0, fail=0;
+
+    for(let i=0;i<list.length;i++){
+      const url = list[i];
+      if(!YT_WHITELIST.test(url)){ fail++; setMsg(`YouTube 링크만 등록할 수 있습니다. (${ok+fail}/${list.length})`); continue; }
+      const id  = extractId(url);
+      if(!id){ fail++; setMsg(`등록 중... (${ok+fail}/${list.length})`); continue; }
+
+      let title = '';
+      try{ title = await fetchTitleById(id); }catch{}
+
+      const docData = {
+        url,
+        ...(title ? { title } : {}),
+        categories: [seriesKey],    // 시리즈 카테고리 값 그대로 사용
+        uid: user.uid,              // 규칙(compat)에서 uid/ownerUid 둘 다 허용
+        createdAt: serverTimestamp(),
+
+        // ▼ 시리즈 메타
+        seriesKey,
+        seriesTitle,
+        episode: nextEp++
+      };
+
+      try{
+        await addDoc(collection(db,'videos'), docData);
+        ok++;
+      }catch(e){
+        console.error('[upload.series] addDoc failed:', e?.code, e?.message);
+        fail++;
+      }
+      setMsg(`등록 중... (${ok+fail}/${list.length})`);
+    }
+
+    setMsg(`완료: 성공 ${ok}건, 실패 ${fail}건`);
+    if(ok){ urlsBox.value=''; document.querySelectorAll('.cat:checked').forEach(c=> c.checked=false); }
+    return;
+  }
+
+  // C) 일반 카테고리 업로드 (기존 로직)
   if(normals.length===0){
     setMsg('카테고리를 최소 1개 선택해 주세요.');
     return;
@@ -279,28 +384,22 @@ async function submitAll(){
   setMsg(`등록 중... (0/${list.length})`);
   let ok=0, fail=0;
 
-  // 순차 처리(간단/안전)
   for(let i=0;i<list.length;i++){
     const url = list[i];
-
-    // 안전 URL 검사
     if(!YT_WHITELIST.test(url)){ fail++; setMsg(`YouTube 링크만 등록할 수 있습니다. (${ok+fail}/${list.length})`); continue; }
-
     const id  = extractId(url);
     if(!id){ fail++; setMsg(`등록 중... (${ok+fail}/${list.length})`); continue; }
 
-    // 제목 oEmbed — 실패해도 진행
     let title = '';
     try{ title = await fetchTitleById(id); }catch{}
 
     try{
       const docData = {
         url,
-        ...(title ? { title } : {}),     // 빈 문자열이면 필드 생략
+        ...(title ? { title } : {}),
         categories: normals,
-        uid: user.uid,                   // (레거시 스키마 유지) — 규칙 ownerOf()가 uid/ownerUid 모두 수용
+        uid: user.uid,
         createdAt: serverTimestamp(),
-        // thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
       };
       await addDoc(collection(db,'videos'), docData);
       ok++;
@@ -315,10 +414,11 @@ async function submitAll(){
   if(ok){ urlsBox.value=''; document.querySelectorAll('.cat:checked').forEach(c=> c.checked=false); }
 }
 
+/* ------- 버튼 바인딩 ------- */
 $('#btnSubmitTop')   ?.addEventListener('click', submitAll);
 $('#btnSubmitBottom')?.addEventListener('click', submitAll);
 
-// 디버깅 힌트
+/* ------- 디버 힌트(옵션) ------- */
 try{
   console.debug('[upload] CATEGORY_GROUPS keys:', CATEGORY_GROUPS.map(g=>g.key));
   console.debug('[upload] groupOrderV1:', localStorage.getItem('groupOrderV1'));
@@ -349,32 +449,24 @@ try{
 function simpleSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZoneCenterRatio=0.30 } = {}){
   let sx=0, sy=0, t0=0, tracking=false;
   const THRESH_X = 70, MAX_OFF_Y = 80, MAX_TIME = 600;
-
   const getPoint = (e) => e.touches?.[0] || e.changedTouches?.[0] || e;
-
   function onStart(e){
-    const p = getPoint(e);
-    if(!p) return;
-
-    // 중앙 데드존
+    const p = getPoint(e); if(!p) return;
     const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
     const dz = Math.max(0, Math.min(0.9, deadZoneCenterRatio));
     const L  = vw * (0.5 - dz/2);
     const R  = vw * (0.5 + dz/2);
     if (p.clientX >= L && p.clientX <= R) { tracking = false; return; }
-
     sx = p.clientX; sy = p.clientY; t0 = Date.now(); tracking = true;
   }
   function onEnd(e){
     if(!tracking) return; tracking = false;
     if (window.__swipeNavigating) return;
-
     const p = getPoint(e);
     const dx = p.clientX - sx;
     const dy = p.clientY - sy;
     const dt = Date.now() - t0;
     if (Math.abs(dy) > MAX_OFF_Y || dt > MAX_TIME) return;
-
     if (dx <= -THRESH_X && goLeftHref){
       window.__swipeNavigating = true;
       document.documentElement.classList.add('slide-out-left');
@@ -391,106 +483,4 @@ function simpleSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, dead
   document.addEventListener('pointerup',  onEnd,   { passive:true });
 }
 
-/* ===================== */
-/* 고급형 스와이프 — 끌리는 모션 + 방향 잠금 + 중앙 데드존(15%) */
-/* ===================== */
-(function(){
-  function initDragSwipe({ goLeftHref=null, goRightHref=null, threshold=60, slop=45, timeMax=700, feel=1.0, deadZoneCenterRatio=0.15 }={}){
-    const page = document.querySelector('main') || document.body;
-    if(!page) return;
-
-    // 드래그 성능 힌트
-    if(!page.style.willChange || !page.style.willChange.includes('transform')){
-      page.style.willChange = (page.style.willChange ? page.style.willChange + ', transform' : 'transform');
-    }
-
-    let x0=0, y0=0, t0=0, active=false, canceled=false;
-    const isInteractive = (el)=> !!(el && (el.closest('input,textarea,select,button,a,[role="button"],[contenteditable="true"]')));
-
-    function reset(anim=true){
-      if(anim) page.style.transition = 'transform 180ms ease';
-      requestAnimationFrame(()=>{ page.style.transform = 'translateX(0px)'; });
-      setTimeout(()=>{ if(anim) page.style.transition = ''; }, 200);
-    }
-
-    function start(e){
-      if (window.__swipeNavigating) return;
-      const t = (e.touches && e.touches[0]) || (e.pointerType ? e : null);
-      if(!t) return;
-      if(isInteractive(e.target)) return;
-
-      // 중앙 데드존
-      const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
-      const dz = Math.max(0, Math.min(0.9, deadZoneCenterRatio));
-      const L  = vw * (0.5 - dz/2);
-      const R  = vw * (0.5 + dz/2);
-      if (t.clientX >= L && t.clientX <= R) return;
-
-      x0 = t.clientX; y0 = t.clientY; t0 = Date.now();
-      active = true; canceled = false;
-      page.style.transition = 'none';
-    }
-
-    function move(e){
-      if(!active) return;
-      const t = (e.touches && e.touches[0]) || (e.pointerType ? e : null);
-      if(!t) return;
-
-      const dx = t.clientX - x0;
-      const dy = t.clientY - y0;
-
-      if(Math.abs(dy) > slop){
-        canceled = true; active = false;
-        reset(true);
-        return;
-      }
-
-      // 방향 잠금: upload는 오른쪽으로만 이동 허용(goRightHref만 설정)
-      let dxAdj = dx;
-      if (dx < 0) dxAdj = 0; // 왼쪽 이동 완전 차단
-      if (dxAdj === 0){
-        page.style.transform = 'translateX(0px)';
-        return;
-      }
-
-      e.preventDefault(); // 수평 제스처 시 스크롤 방지
-      page.style.transform = 'translateX(' + (dxAdj * feel) + 'px)';
-    }
-
-    function end(e){
-      if(!active) return; active = false;
-      const t = (e.changedTouches && e.changedTouches[0]) || (e.pointerType ? e : null);
-      if(!t) return;
-      const dx = t.clientX - x0;
-      const dy = t.clientY - y0;
-      const dt = Date.now() - t0;
-
-      if(canceled || Math.abs(dy) > slop || dt > timeMax){
-        reset(true);
-        return;
-      }
-
-      // 오른쪽 스와이프만 성공 처리
-      if(dx >= threshold && goRightHref){
-        window.__swipeNavigating = true;
-        page.style.transition = 'transform 160ms ease';
-        page.style.transform  = 'translateX(100vw)';
-        setTimeout(()=>{ location.href = goRightHref; }, 150);
-      } else {
-        reset(true);
-      }
-    }
-
-    // 터치 & 포인터 (end/up은 capture:true 권장)
-    document.addEventListener('touchstart',  start, { passive:true });
-    document.addEventListener('touchmove',   move,  { passive:false });
-    document.addEventListener('touchend',    end,   { passive:true, capture:true });
-
-    document.addEventListener('pointerdown', start, { passive:true });
-    document.addEventListener('pointermove', move,  { passive:false });
-    document.addEventListener('pointerup',   end,   { passive:true, capture:true });
-  }
-
-  // upload: 오른쪽으로 스와이프하면 index로 (왼쪽은 아예 안 움직임)
-  initDragSwipe({ goLeftHref: null, goRightHref: 'index.html', threshold:60, slop:45, timeMax:700, feel:1.0, deadZoneCenterRatio: 0.15 });
-})();
+// End of js/upload.js (v1.8.0-series)
