@@ -1,1 +1,47 @@
-Hello world
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>KidsAni</title>
+  <style>
+    body{font-family:system-ui,Arial,Helvetica,sans-serif;background:#111;color:#fff;margin:0;padding:24px}
+    a,button{color:#fff}
+    .row{display:flex;gap:12px;align-items:center;margin:12px 0}
+    .btn{padding:8px 12px;border:1px solid #444;border-radius:8px;background:#1b1b1b;cursor:pointer}
+    .muted{color:#aaa}
+  </style>
+</head>
+<body>
+  <h1>KidsAni</h1>
+  <div class="row">
+    <a class="btn" href="signup.html">회원가입(구글)</a>
+    <a class="btn" href="signin.html">로그인</a>
+    <button id="btnSignOut" class="btn">로그아웃</button>
+  </div>
+  <p id="status" class="muted">로그인 상태 확인 중…</p>
+
+  <script type="module">
+    import './js/firebase-init.js';
+    import { onAuth, doSignOut } from './js/auth.js';
+
+    const status = document.getElementById('status');
+    const btnSignOut = document.getElementById('btnSignOut');
+
+    onAuth(u=>{
+      if(u){
+        status.textContent = `로그인됨: ${u.email || u.uid}`;
+        btnSignOut.disabled = false;
+      }else{
+        status.textContent = '로그아웃됨';
+        btnSignOut.disabled = true;
+      }
+    });
+
+    btnSignOut.addEventListener('click', async ()=>{
+      await doSignOut();
+      location.reload();
+    });
+  </script>
+</body>
+</html>
