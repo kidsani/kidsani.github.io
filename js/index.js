@@ -1,12 +1,13 @@
-// js/index.js (v1.7.2) — drag-follow & simple swipe kept + 중앙 30% 데드존
-import { CATEGORY_GROUPS } from './categories.js?v=1.5.1';
+// js/index.js (v1.9.0-kidsani-full)
+import { CATEGORY_GROUPS, isSeriesGroupKey, getSeriesOrderDefault } from './categories.js'; // 쿼리 제거
 import { auth } from './firebase-init.js?v=1.5.1';
 import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=1.5.1';
 
-const GROUP_ORDER_KEY = 'groupOrderV1';
-const isPersonalVal = (v)=> v==='personal1' || v==='personal2';
+const GROUP_ORDER_KEY   = 'groupOrderV1';
+const ORDER_PREF_PREFIX = 'orderMode:'; // key = ORDER_PREF_PREFIX + groupKey → 'created' | 'latest'
+const isPersonalVal = (v)=> v==='personal_1' || v==='personal_2' || v==='personal1' || v==='personal2';
 
-// 전역 내비게이션 가드(단순형/고급형 중복 방지)
+// 전역 내비 중복 방지
 window.__swipeNavigating = window.__swipeNavigating || false;
 
 /* ---------- group order ---------- */
@@ -15,7 +16,7 @@ function applyGroupOrder(groups){
   try{ saved = JSON.parse(localStorage.getItem(GROUP_ORDER_KEY) || 'null'); }catch{}
   const order = Array.isArray(saved) && saved.length ? saved : groups.map(g=>g.key);
   const idx = new Map(order.map((k,i)=>[k,i]));
-  return groups.slice().sort((a,b)=>(idx.get(a.key)??999) - (idx.get(b.key)??999));
+  return groups.slice().sort((a,b)=>(idx.get(a.key)??999)-(idx.get(b.key)??999));
 }
 
 /* ---------- personal labels (local) ---------- */
@@ -38,9 +39,8 @@ const btnOrder     = document.getElementById("btnOrder");
 const btnList      = document.getElementById("btnList");
 const brandHome    = document.getElementById("brandHome");
 
-let isMenuOpen=false;
-function openDropdown(){ isMenuOpen=true; dropdown.classList.remove("hidden"); requestAnimationFrame(()=> dropdown.classList.add("show")); }
-function closeDropdown(){ isMenuOpen=false; dropdown.classList.remove("show"); setTimeout(()=> dropdown.classList.add("hidden"),180); }
+function openDropdown(){ dropdown.classList.remove("hidden"); requestAnimationFrame(()=> dropdown.classList.add("show")); }
+function closeDropdown(){ dropdown.classList.remove("show"); setTimeout(()=> dropdown.classList.add("hidden"),180); }
 
 onAuthStateChanged(auth,(user)=>{
   const loggedIn = !!user;
@@ -61,35 +61,15 @@ btnSignOut   ?.addEventListener("click", async ()=>{ if(!auth.currentUser){ loca
 btnList      ?.addEventListener("click", ()=>{ location.href = "list.html"; closeDropdown(); });
 brandHome    ?.addEventListener("click",(e)=>{ e.preventDefault(); window.scrollTo({top:0,behavior:"smooth"}); });
 
-/* === 연속재생(autonext) 표준 관리: index 전용 === */
+/* === 연속재생(autonext) === */
 (function setupAutoNext(){
-  const KEY = 'autonext';
-  const $auto = document.getElementById('cbAutoNext'); // index.html 체크박스 id
-  if (!$auto) return;
-
-  const read = () => {
-    const v = (localStorage.getItem(KEY) || '').toLowerCase();
-    return v === '1' || v === 'true' || v === 'on';
-  };
-  const write = (on) => {
-    localStorage.setItem(KEY, on ? '1' : '0'); // 포맷 통일
-  };
-
-  const hasSaved = localStorage.getItem(KEY) != null;
-  if (hasSaved) {
-    $auto.checked = read();
-  } else {
-    // 첫 방문: HTML 기본상태를 seed로 저장
-    write($auto.checked);
-  }
-
-  // 즉시 저장
-  $auto.addEventListener('change', () => write($auto.checked));
-
-  // 다른 탭/페이지 변경 반영
-  window.addEventListener('storage', (e)=>{
-    if (e.key === KEY) $auto.checked = read();
-  });
+  const KEY='autonext', $auto=document.getElementById('cbAutoNext');
+  if(!$auto) return;
+  const read=()=>{ const v=(localStorage.getItem(KEY)||'').toLowerCase(); return v==='1'||v==='true'||v==='on'; };
+  const write=(on)=> localStorage.setItem(KEY, on?'1':'0');
+  if(localStorage.getItem(KEY)!=null){ $auto.checked = read(); } else { write($auto.checked); }
+  $auto.addEventListener('change', ()=> write($auto.checked));
+  window.addEventListener('storage', (e)=>{ if(e.key===KEY) $auto.checked = read(); });
 })();
 
 /* ---------- cats ---------- */
@@ -99,38 +79,61 @@ const cbAutoNext   = document.getElementById("cbAutoNext");
 const cbToggleAll  = document.getElementById("cbToggleAll");
 const catTitleBtn  = document.getElementById("btnOpenOrder");
 
+/* ---- 시리즈 정렬모드 per group ---- */
+function getOrderMode(groupKey){
+  if(!isSeriesGroupKey(groupKey)) return 'created'; // 시리즈가 아니면 토글 없음
+  const saved = localStorage.getItem(ORDER_PREF_PREFIX + groupKey);
+  return (saved==='latest' || saved==='created') ? saved : getSeriesOrderDefault(groupKey);
+}
+function toggleOrderMode(groupKey){
+  const cur = getOrderMode(groupKey);
+  const next = (cur==='created') ? 'latest' : 'created';
+  localStorage.setItem(ORDER_PREF_PREFIX + groupKey, next);
+  const btn = catsBox.querySelector(`.order-toggle[data-group="${groupKey}"]`);
+  if(btn) btn.textContent = (next==='created') ? '등록순' : '최신순';
+}
+
+/* ---- 렌더 ---- */
 function renderGroups(){
   const groups = applyGroupOrder(CATEGORY_GROUPS);
   const personalLabels = getPersonalLabels();
 
   const html = groups.map(g=>{
     const isPersonalGroup = g.key==='personal';
+    const isSeriesGroup   = isSeriesGroupKey(g.key);
 
-    // children with personal label override
+    // children
     const kids = g.children.map(c=>{
-      const labelText = isPersonalGroup && personalLabels[c.value]
-        ? personalLabels[c.value]
-        : c.label;
+      const labelText = (isPersonalGroup && personalLabels[c.value]) ? personalLabels[c.value] : c.label;
       return `<label><input type="checkbox" class="cat" value="${c.value}"> ${labelText}</label>`;
     }).join('');
 
-    // legend: personal has no parent checkbox + "(로컬저장소)" 유지
+    // legend: [체크박스][제목][(시리즈면)정렬토글]
+    const baseToggle = `
+      <label class="group-toggle">
+        <input type="checkbox" class="group-check" data-group="${g.key}" />
+        <span>${g.label}</span>
+      </label>`;
+
+    const orderBtn = isSeriesGroup
+      ? `<button type="button" class="group-toggle order-toggle" data-group="${g.key}" aria-label="정렬 전환">
+           ${getOrderMode(g.key)==='created' ? '등록순' : '최신순'}
+         </button>`
+      : '';
+
     const legendHTML = isPersonalGroup
       ? `<legend><span style="font-weight:800;">${g.label}</span> <span class="muted">(로컬저장소)</span></legend>`
-      : `<legend>
-           <label class="group-toggle">
-             <input type="checkbox" class="group-check" data-group="${g.key}" />
-             <span>${g.label}</span>
-           </label>
-         </legend>`;
+      : `<legend style="display:flex; gap:8px; align-items:center;">${baseToggle}${orderBtn}</legend>`;
 
-    // 안내문은 "아래"로
     const noteHTML = isPersonalGroup
       ? `<div class="muted" style="margin:6px 4px 2px;">개인자료는 <b>단독 재생만</b> 가능합니다.</div>`
       : '';
 
+    // data-series="1" 마킹으로 CSS 선택자 대신 확실히 구분
+    const seriesAttr = isSeriesGroup ? ' data-series="1"' : ' data-series="0"';
+
     return `
-      <fieldset class="group" data-key="${g.key}">
+      <fieldset class="group" data-key="${g.key}"${seriesAttr}>
         ${legendHTML}
         <div class="child-grid">${kids}</div>
         ${noteHTML}
@@ -145,58 +148,63 @@ renderGroups();
 
 /* ---------- parent/child sync ---------- */
 function setParentStateByChildren(groupEl){
-  const parent   = groupEl.querySelector('.group-check');
-  if (!parent) return; // personal: no parent toggle
+  const parent = groupEl.querySelector('.group-check');
+  if(!parent) return; // personal: no parent
   const children = Array.from(groupEl.querySelectorAll('input.cat'));
   const total = children.length;
-  const checked = children.filter(c => c.checked).length;
-  if (checked===0){ parent.checked=false; parent.indeterminate=false; }
-  else if (checked===total){ parent.checked=true; parent.indeterminate=false; }
+  const checked = children.filter(c=>c.checked).length;
+  if(checked===0){ parent.checked=false; parent.indeterminate=false; }
+  else if(checked===total){ parent.checked=true; parent.indeterminate=false; }
   else { parent.checked=false; parent.indeterminate=true; }
 }
 function setChildrenByParent(groupEl,on){
-  groupEl.querySelectorAll('input.cat').forEach(c=> c.checked = !!on);
+  groupEl.querySelectorAll('input.cat').forEach(c=> c.checked=!!on);
 }
 function refreshAllParentStates(){
   catsBox.querySelectorAll('.group').forEach(setParentStateByChildren);
 }
 function computeAllSelected(){
-  // 전체선택 비교는 personal/series 제외
-  const real = Array.from(catsBox.querySelectorAll('.group:not([data-key="personal"]):not([data-key="series"]) input.cat'));
+  // 전체선택: personal & series 제외
+  const real = Array.from(catsBox.querySelectorAll('.group[data-series="0"]:not([data-key="personal"]) input.cat'));
   return real.length>0 && real.every(c=>c.checked);
 }
 let allSelected=false;
 
 function bindGroupInteractions(){
-  // parent toggles (not for personal)
+  // 그룹 체크박스
   catsBox.querySelectorAll('.group-check').forEach(parent=>{
     const groupKey = parent.getAttribute('data-group');
-    if (groupKey === 'personal') return;
     parent.addEventListener('change', ()=>{
       const groupEl = parent.closest('.group');
       setChildrenByParent(groupEl, parent.checked);
       setParentStateByChildren(groupEl);
       allSelected = computeAllSelected();
       if (cbToggleAll) cbToggleAll.checked = allSelected;
-
-      // deselect personals if any were on
+      // 일반 선택 시 personal 해제
       catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked').forEach(c=> c.checked=false);
     });
   });
 
-  // child toggles
+  // 시리즈 정렬 토글
+  catsBox.querySelectorAll('.order-toggle').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const gk = btn.getAttribute('data-group');
+      toggleOrderMode(gk);
+    });
+  });
+
+  // 자식 체크
   catsBox.querySelectorAll('input.cat').forEach(child=>{
     child.addEventListener('change', ()=>{
       const v = child.value;
       const isPersonal = isPersonalVal(v);
 
       if (isPersonal && child.checked){
-        // personal = single-mode: clear others
+        // 개인 = 단독
         catsBox.querySelectorAll('.group[data-key="personal"] input.cat').forEach(c=>{ if(c!==child) c.checked=false; });
         catsBox.querySelectorAll('.group:not([data-key="personal"]) input.cat:checked').forEach(c=> c.checked=false);
       }
       if (!isPersonal && child.checked){
-        // selecting normal → clear personals
         catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked').forEach(c=> c.checked=false);
       }
 
@@ -212,13 +220,13 @@ function bindGroupInteractions(){
 
 /* ---------- select all & load saved ---------- */
 function selectAll(on){
-  // 일반 카테고리 전체 on/off (personal/series 제외)
+  // personal & series 제외
   catsBox
-    .querySelectorAll('.group:not([data-key="personal"]):not([data-key="series"]) input.cat')
+    .querySelectorAll('.group[data-series="0"]:not([data-key="personal"]) input.cat')
     .forEach(b => { b.checked = !!on; });
 
   // 전체선택 시 personal/series는 항상 해제
-  catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked, .group[data-key="series"] input.cat:checked')
+  catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked, .group[data-series="1"] input.cat:checked')
     .forEach(c => { c.checked = false; });
 
   refreshAllParentStates();
@@ -233,17 +241,18 @@ function applySavedSelection(){
     selectAll(false);
     const set = new Set(saved);
     catsBox.querySelectorAll('.cat').forEach(ch=>{ if (set.has(ch.value)) ch.checked=true; });
-    // guard: personal single-mode
+
+    // guard: personal 단독
     const personals = Array.from(catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked'));
     const normals   = Array.from(catsBox.querySelectorAll('.group:not([data-key="personal"]) input.cat:checked'));
     if (personals.length >= 1 && normals.length >= 1){
       personals.forEach(c=> c.checked=false);
-    }else if (personals.length >= 2){
+    } else if (personals.length >= 2){
       personals.slice(1).forEach(c=> c.checked=false);
     }
     refreshAllParentStates();
   }
-  // 연속재생 초기 표시(여러 포맷 허용)
+  // autonext 초기 반영
   const vv = (localStorage.getItem('autonext') || '').toLowerCase();
   if (cbAutoNext) cbAutoNext.checked = (vv==='1' || vv==='true' || vv==='on');
 }
@@ -253,32 +262,40 @@ cbToggleAll?.addEventListener('change', ()=> selectAll(!!cbToggleAll.checked));
 
 /* ---------- go watch ---------- */
 btnWatch?.addEventListener('click', ()=>{
-  // list→watch 잔여 큐 무시: index→watch는 항상 최신부터 시작
+  // index→watch: 항상 최신 큐로
   sessionStorage.removeItem('playQueue'); sessionStorage.removeItem('playIndex');
 
   const selected = Array.from(document.querySelectorAll('.cat:checked')).map(c=>c.value);
   const personals = selected.filter(isPersonalVal);
   const normals   = selected.filter(v=> !isPersonalVal(v));
 
-  // personal-only
+  // 개인자료 단독
   if (personals.length === 1 && normals.length === 0){
     localStorage.setItem('selectedCats', JSON.stringify(personals));
-    localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0'); // 통일
+    localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
     location.href = `watch.html?cats=${encodeURIComponent(personals[0])}`;
     return;
   }
 
-  // normal only (no personals mixed)
-  const isAll = computeAllSelected(); // personal/series 제외 기준으로 판정
+  // 일반(시리즈 포함한 선택도 허용) — 전체선택 판정은 series 제외 기준
+  const isAll = computeAllSelected();
   const valueToSave = (normals.length===0 || isAll) ? "ALL" : normals;
   localStorage.setItem('selectedCats', JSON.stringify(valueToSave));
-  localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0'); // 통일
+  localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
+
+  // 시리즈별 정렬 모드 힌트 저장(옵션: watch/list 에서 활용)
+  const seriesOrderHints = {};
+  applyGroupOrder(CATEGORY_GROUPS).forEach(g=>{
+    if(isSeriesGroupKey(g.key)) seriesOrderHints[g.key] = getOrderMode(g.key); // 'created' | 'latest'
+  });
+  sessionStorage.setItem('seriesOrderHints', JSON.stringify(seriesOrderHints));
+
   location.href = 'watch.html';
 });
 
 catTitleBtn?.addEventListener('click', ()=> location.href='category-order.html');
 
-/* ---------- storage listener: other-tab updates ---------- */
+/* ---------- storage listener ---------- */
 window.addEventListener('storage', (e)=>{
   if (e.key === 'personalLabels' || e.key === 'groupOrderV1') {
     renderGroups();
@@ -305,70 +322,49 @@ window.addEventListener('storage', (e)=>{
   document.head.appendChild(style);
 })();
 
-/* ---------- 선택 저장: index→list 직전 ---------- */
+/* ---------- index→list 직전 선택 저장 ---------- */
 function persistSelectedCatsForList(){
   const selected = Array.from(document.querySelectorAll('.cat:checked')).map(c=>c.value);
   const personals = selected.filter(isPersonalVal);
   const normals   = selected.filter(v=> !isPersonalVal(v));
 
-  // 개인자료 단독 선택이면 그대로 저장
   if (personals.length === 1 && normals.length === 0) {
     localStorage.setItem('selectedCats', JSON.stringify(personals));
     return;
   }
-
-  // 일반 카테고리: ALL or 배열
   const isAll = computeAllSelected() === true;
   const valueToSave = (normals.length===0 || isAll) ? "ALL" : normals;
   localStorage.setItem('selectedCats', JSON.stringify(valueToSave));
 }
 
 /* ===================== */
-/* 단순형 스와이프(중앙 30% 데드존 추가) */
+/* 단순형 스와이프 */
 /* ===================== */
 function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZoneCenterRatio=0.30 } = {}){
   let sx=0, sy=0, t0=0, tracking=false;
-  const THRESH_X = 70;
-  const MAX_OFF_Y = 80;
-  const MAX_TIME  = 600;
-
-  const getPoint = (e) => e.touches?.[0] || e.changedTouches?.[0] || e;
+  const THRESH_X = 70, MAX_OFF_Y = 80, MAX_TIME = 600;
+  const getPoint=(e)=> e.touches?.[0] || e.changedTouches?.[0] || e;
 
   function onStart(e){
-    const p = getPoint(e);
-    if(!p) return;
-
-    // ★ 중앙 데드존(기본 30%) — 이 영역에서 시작한 제스처는 비활성
-    const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
-    const dz = Math.max(0, Math.min(0.9, deadZoneCenterRatio));
-    const L  = vw * (0.5 - dz/2);
-    const R  = vw * (0.5 + dz/2);
-    if (p.clientX >= L && p.clientX <= R) { tracking = false; return; }
-
-    sx = p.clientX; sy = p.clientY; t0 = Date.now(); tracking = true;
+    const p=getPoint(e); if(!p) return;
+    const vw=Math.max(document.documentElement.clientWidth, window.innerWidth||0);
+    const dz=Math.max(0, Math.min(0.9, deadZoneCenterRatio));
+    const L=vw*(0.5-dz/2), R=vw*(0.5+dz/2);
+    if (p.clientX>=L && p.clientX<=R) { tracking=false; return; }
+    sx=p.clientX; sy=p.clientY; t0=Date.now(); tracking=true;
   }
   function onEnd(e){
-    if(!tracking) return; tracking = false;
-
-    // 고급형이 이미 처리 중이면 종료
+    if(!tracking) return; tracking=false;
     if (window.__swipeNavigating) return;
-
-    const p = getPoint(e);
-    const dx = p.clientX - sx;
-    const dy = p.clientY - sy;
-    const dt = Date.now() - t0;
-    if (Math.abs(dy) > MAX_OFF_Y || dt > MAX_TIME) return;
-
-    if (dx <= -THRESH_X && goLeftHref){
-      window.__swipeNavigating = true;
-      document.documentElement.classList.add('slide-out-left');
-      setTimeout(()=> location.href = goLeftHref, animateMs);
-    } else if (dx >= THRESH_X && goRightHref){
-      window.__swipeNavigating = true;
-      // list로 가기 전에 현재 선택 저장
-      persistSelectedCatsForList();
+    const p=getPoint(e); const dx=p.clientX-sx; const dy=p.clientY-sy; const dt=Date.now()-t0;
+    if (Math.abs(dy)>MAX_OFF_Y || dt>MAX_TIME) return;
+    if (dx<=-THRESH_X && goLeftHref){
+      window.__swipeNavigating=true; document.documentElement.classList.add('slide-out-left');
+      setTimeout(()=> location.href=goLeftHref, animateMs);
+    } else if (dx>=THRESH_X && goRightHref){
+      window.__swipeNavigating=true; persistSelectedCatsForList();
       document.documentElement.classList.add('slide-out-right');
-      setTimeout(()=> location.href = goRightHref, animateMs);
+      setTimeout(()=> location.href=goRightHref, animateMs);
     }
   }
   document.addEventListener('touchstart', onStart, { passive:true });
@@ -376,112 +372,65 @@ function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZo
   document.addEventListener('pointerdown',onStart, { passive:true });
   document.addEventListener('pointerup',  onEnd,   { passive:true });
 }
-
-// ✅ index: 우→좌 = upload, 좌→우 = list (단순형 + 중앙 데드존 30%)
-initSwipeNav({ goLeftHref: 'upload.html', goRightHref: 'list.html', deadZoneCenterRatio: 0.30 });
+initSwipeNav({ goLeftHref:'upload.html', goRightHref:'list.html', deadZoneCenterRatio:0.30 });
 
 /* ===================== */
-/* 고급형 스와이프(끌리는 모션, 중앙 30% 데드존 추가) */
+/* 고급형 스와이프 */
 /* ===================== */
 (function(){
-  function initDragSwipe({ goLeftHref=null, goRightHref=null, threshold=60, slop=45, timeMax=700, feel=1.0, deadZoneCenterRatio=0.30 }={}){
-    const page = document.querySelector('main') || document.body;
-    if(!page) return;
-
-    // 드래그 성능 향상 힌트
+  function initDragSwipe({ goLeftHref=null, goRightHref=null, threshold=60, slop=45, timeMax=700, feel=1.0, deadZoneCenterRatio=0.15 }={}){
+    const page=document.querySelector('main')||document.body; if(!page) return;
     if(!page.style.willChange || !page.style.willChange.includes('transform')){
       page.style.willChange = (page.style.willChange ? page.style.willChange + ', transform' : 'transform');
     }
+    let x0=0,y0=0,t0=0,active=false,canceled=false;
+    const isInteractive=(el)=> !!(el && (el.closest('input,textarea,select,button,a,[role="button"],[contenteditable="true"]')));
 
-    let x0=0, y0=0, t0=0, active=false, canceled=false;
-    const isInteractive = (el)=> !!(el && (el.closest('input,textarea,select,button,a,[role="button"],[contenteditable="true"]')));
-
-    function reset(anim=true){
-      if(anim) page.style.transition = 'transform 180ms ease';
-      requestAnimationFrame(()=>{ page.style.transform = 'translateX(0px)'; });
-      setTimeout(()=>{ if(anim) page.style.transition = ''; }, 200);
+    function reset(anim=true){ if(anim) page.style.transition='transform 180ms ease';
+      requestAnimationFrame(()=>{ page.style.transform='translateX(0px)'; });
+      setTimeout(()=>{ if(anim) page.style.transition=''; },200);
     }
 
     function start(e){
-      // 이미 다른 네비가 진행 중이면 무시
       if (window.__swipeNavigating) return;
-
-      const t = (e.touches && e.touches[0]) || (e.pointerType ? e : null);
-      if(!t) return;
-      if(isInteractive(e.target)) return; // 폼 요소 위에서 시작하면 무시
-
-      // ★ 중앙 데드존(기본 30%)
-      const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
-      const dz = Math.max(0, Math.min(0.9, deadZoneCenterRatio));
-      const L  = vw * (0.5 - dz/2);
-      const R  = vw * (0.5 + dz/2);
-      if (t.clientX >= L && t.clientX <= R) return;
-
-      x0 = t.clientX; y0 = t.clientY; t0 = Date.now();
-      active = true; canceled = false;
-      page.style.transition = 'none';
+      const t=(e.touches&&e.touches[0])||(e.pointerType?e:null); if(!t) return;
+      if(isInteractive(e.target)) return;
+      const vw=Math.max(document.documentElement.clientWidth, window.innerWidth||0);
+      const dz=Math.max(0, Math.min(0.9, deadZoneCenterRatio));
+      const L=vw*(0.5-dz/2), R=vw*(0.5+dz/2);
+      if (t.clientX>=L && t.clientX<=R) return;
+      x0=t.clientX; y0=t.clientY; t0=Date.now(); active=true; canceled=false; page.style.transition='none';
     }
 
     function move(e){
       if(!active) return;
-      const t = (e.touches && e.touches[0]) || (e.pointerType ? e : null);
-      if(!t) return;
-      const dx = t.clientX - x0;
-      const dy = t.clientY - y0;
-      if(Math.abs(dy) > slop){
-        canceled = true; active = false;
-        reset(true);
-        return;
-      }
-      // 손가락에 따라 화면을 좌/우로 끌기
-      e.preventDefault(); // 수평 제스처 시 스크롤 방지
-      page.style.transform = 'translateX(' + (dx * feel) + 'px)';
+      const t=(e.touches&&e.touches[0])||(e.pointerType?e:null); if(!t) return;
+      const dx=t.clientX-x0, dy=t.clientY-y0;
+      if(Math.abs(dy)>slop){ canceled=true; active=false; reset(true); return; }
+      e.preventDefault(); page.style.transform='translateX('+(dx*feel)+'px)';
     }
 
     function end(e){
-      if(!active) return; active = false;
-      const t = (e.changedTouches && e.changedTouches[0]) || (e.pointerType ? e : null);
-      if(!t) return;
-      const dx = t.clientX - x0;
-      const dy = t.clientY - y0;
-      const dt = Date.now() - t0;
-
-      if(canceled || Math.abs(dy) > slop || dt > timeMax){
-        reset(true);
-        return;
-      }
-
-      if(dx >= threshold && goRightHref){
-        // 오른쪽 스와이프 → list.html
-        window.__swipeNavigating = true;
-        // index→list: 현재 선택 저장
-        persistSelectedCatsForList();
-        page.style.transition = 'transform 160ms ease';
-        page.style.transform  = 'translateX(100vw)';
-        setTimeout(()=>{ location.href = goRightHref; }, 150);
-      } else if(dx <= -threshold && goLeftHref){
-        // 왼쪽 스와이프 → upload.html
-        window.__swipeNavigating = true;
-        page.style.transition = 'transform 160ms ease';
-        page.style.transform  = 'translateX(-100vw)';
-        setTimeout(()=>{ location.href = goLeftHref; }, 150);
-      } else {
-        reset(true);
-      }
+      if(!active) return; active=false;
+      const t=(e.changedTouches&&e.changedTouches[0])||(e.pointerType?e:null); if(!t) return;
+      const dx=t.clientX-x0, dy=t.clientY-y0, dt=Date.now()-t0;
+      if(canceled || Math.abs(dy)>slop || dt>timeMax){ reset(true); return; }
+      if(dx>=threshold && goRightHref){
+        window.__swipeNavigating=true; persistSelectedCatsForList();
+        page.style.transition='transform 160ms ease'; page.style.transform='translateX(100vw)';
+        setTimeout(()=>{ location.href=goRightHref; },150);
+      } else if(dx<=-threshold && goLeftHref){
+        window.__swipeNavigating=true; page.style.transition='transform 160ms ease'; page.style.transform='translateX(-100vw)';
+        setTimeout(()=>{ location.href=goLeftHref; },150);
+      } else { reset(true); }
     }
 
-    // 터치 & 포인터: end/up은 capture:true로 등록해 단순형보다 먼저 실행
     document.addEventListener('touchstart',  start, { passive:true });
     document.addEventListener('touchmove',   move,  { passive:false });
     document.addEventListener('touchend',    end,   { passive:true, capture:true });
-
     document.addEventListener('pointerdown', start, { passive:true });
     document.addEventListener('pointermove', move,  { passive:false });
     document.addEventListener('pointerup',   end,   { passive:true, capture:true });
   }
-
-  // index: 좌→우 = list, 우→좌 = upload (고급형 + 중앙 데드존 30%)
-  initDragSwipe({ goLeftHref: 'upload.html', goRightHref: 'list.html', threshold:60, slop:45, timeMax:700, feel:1.0, deadZoneCenterRatio: 0.15 });
+  initDragSwipe({ goLeftHref:'upload.html', goRightHref:'list.html', threshold:60, slop:45, timeMax:700, feel:1.0, deadZoneCenterRatio:0.15 });
 })();
-
-// End of js/index.js (v1.7.2)
