@@ -1,6 +1,6 @@
 import { auth, db, googleProvider } from "./firebase-init.js";
-import { signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-import { doc, getDoc, setDoc, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+import { signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+import { doc, getDoc, setDoc, runTransaction } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
 // 닉네임 형식: 한글/영문/숫자/밑줄 2~16자
 const NICK_RE = /^[가-힣A-Za-z0-9_]{2,16}$/;
