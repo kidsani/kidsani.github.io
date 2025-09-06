@@ -18,7 +18,7 @@
 
   <link rel="stylesheet" href="css/style.css"/>
 
-  <!-- 칩 토글(등록순/최신순) 전용 최소 스타일 -->
+  <!-- 칩 토글(등록순/최신순/가나다) 전용 최소 스타일 -->
   <style>
     :root{ --cta-width:148px; }
     .lead{ font-size:20px; color:#e6e6e6; margin:0 0 6px; }
@@ -53,9 +53,9 @@
     @media (min-width:900px){ .child-grid{ grid-template-columns:repeat(4, minmax(0,1fr)); } }
     .child-grid label{ background:#0f0f0f; border:1px solid #2a2a2a; border-radius:8px; padding:6px 8px; font-size:14px; line-height:1.2; display:flex; gap:6px; align-items:center; justify-content:flex-start; position:relative; }
 
-    /* ----- 시리즈 정렬 칩 (단일 토글) ----- */
+    /* ----- 시리즈 정렬 칩 (등록순 ↔ 최신순 ↔ 가나다순) ----- */
     .chip-toggle{
-      margin-left:auto; /* 라벨 우측 정렬 */
+      margin-left:auto;
       font-size:12px; line-height:1;
       padding:2px 8px; border-radius:999px;
       background:#151515; color:#ddd; border:1px solid #2a2a2a;
@@ -143,6 +143,6 @@
   <script type="module" src="js/firebase-init.js?v=0.1.0"></script>
   <script type="module" src="js/auth.js?v=0.1.0"></script>
   <script type="module" src="js/categories.js?v=1.6.0"></script>
-  <script type="module" src="js/index.js?v=1.8.0"></script>
+  <script type="module" src="js/index.js?v=1.9.0"></script>
 </body>
 </html>
