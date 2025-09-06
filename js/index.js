@@ -1,36 +1,10 @@
-// js/index.js (v1.9.1-kidsani-complete)
-// - categories.js?v=1.5.1 로딩 실패 시 ./categories.js로 재시도
-// - 드롭다운/상단바/카테고리/시리즈토글/전체선택/개인단독/스와이프 전체 포함
+// js/index.js (v1.9.2-kidsani-complete)
+// - categories.js를 정식 import (필수)
+// - 드롭다운/상단바/카테고리 렌더/시리즈 토글/전체선택 제외/개인 단독/스와이프 전체 포함
 
+import { CATEGORY_GROUPS, isSeriesGroupKey, getSeriesOrderDefault } from './categories.js?v=1.5.1';
 import { auth } from './firebase-init.js?v=1.5.1';
 import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=1.5.1';
-
-/* ===================== */
-/* 안전한 categories 로딩 */
-/* ===================== */
-let CATEGORY_GROUPS = [];
-let _isSeriesGroupKey = null;
-let _getSeriesOrderDefault = null;
-
-async function loadCategories(){
-  try {
-    const m = await import('./categories.js?v=1.5.1');
-    CATEGORY_GROUPS = m.CATEGORY_GROUPS || [];
-    _isSeriesGroupKey = m.isSeriesGroupKey || null;
-    _getSeriesOrderDefault = m.getSeriesOrderDefault || null;
-  } catch (e1) {
-    console.warn('[KidsAni] categories.js?v=1.5.1 import 실패, fallback 시도', e1);
-    try {
-      const m2 = await import('./categories.js');
-      CATEGORY_GROUPS = m2.CATEGORY_GROUPS || [];
-      _isSeriesGroupKey = m2.isSeriesGroupKey || null;
-      _getSeriesOrderDefault = m2.getSeriesOrderDefault || null;
-    } catch (e2) {
-      console.error('[KidsAni] categories import 실패', e2);
-      CATEGORY_GROUPS = [];
-    }
-  }
-}
 
 /* ===================== */
 /* 공통 상수/도우미 */
@@ -39,27 +13,11 @@ const GROUP_ORDER_KEY   = 'groupOrderV1';
 const ORDER_PREF_PREFIX = 'orderMode:'; // 'orderMode:<groupKey>' = 'created' | 'latest'
 const isPersonalVal = (v)=> v==='personal_1' || v==='personal_2' || v==='personal1' || v==='personal2';
 
-// fallback 시리즈 판별: key 접두사 'series_' 또는 localStorage('seriesGroupKeys')
-function _getSeriesKeySet(){
-  try{
-    const raw = localStorage.getItem('seriesGroupKeys');
-    const arr = JSON.parse(raw || '[]');
-    return new Set(Array.isArray(arr)?arr:[]);
-  }catch{ return new Set(); }
-}
-function isSeriesGroupKey(key){
-  if (typeof _isSeriesGroupKey === 'function') return _isSeriesGroupKey(key);
-  const set = _getSeriesKeySet();
-  return typeof key === 'string' && (key.startsWith('series_') || set.has(key));
-}
-function getSeriesOrderDefault(key){
-  if (typeof _getSeriesOrderDefault === 'function') return _getSeriesOrderDefault(key);
-  return 'created';
-}
+// 시리즈 정렬 모드
 function getOrderMode(groupKey){
   if(!isSeriesGroupKey(groupKey)) return 'created';
-  const v = localStorage.getItem(ORDER_PREF_PREFIX + groupKey);
-  return (v==='latest' || v==='created') ? v : getSeriesOrderDefault(groupKey);
+  const saved = localStorage.getItem(ORDER_PREF_PREFIX + groupKey);
+  return (saved==='latest' || saved==='created') ? saved : getSeriesOrderDefault(groupKey);
 }
 function toggleOrderMode(groupKey){
   const next = (getOrderMode(groupKey)==='created') ? 'latest' : 'created';
@@ -143,8 +101,8 @@ const catTitleBtn  = document.getElementById("btnOpenOrder");
 
 function safeGroups(){
   if (!Array.isArray(CATEGORY_GROUPS) || CATEGORY_GROUPS.length===0){
-    console.error('[KidsAni] CATEGORY_GROUPS empty.');
-    catsBox && (catsBox.innerHTML = `<div class="muted" style="padding:8px;">카테고리를 불러오지 못했습니다. <code>js/categories.js</code> 배포/경로를 확인하세요.</div>`);
+    console.error('[KidsAni] CATEGORY_GROUPS empty. js/categories.js 배포/경로 확인');
+    catsBox && (catsBox.innerHTML = `<div class="muted" style="padding:8px;">카테고리를 불러오지 못했습니다. <code>js/categories.js</code>를 확인해 주세요.</div>`);
     return [];
   }
   return CATEGORY_GROUPS;
@@ -158,13 +116,15 @@ function renderGroups(){
 
   const html = groups.map(g=>{
     const isPersonalGroup = g.key==='personal';
-    const series          = isSeriesGroupKey(g.key);
+    const isSeries        = isSeriesGroupKey(g.key);
 
+    // children
     const kids = g.children.map(c=>{
       const labelText = (isPersonalGroup && personalLabels[c.value]) ? personalLabels[c.value] : c.label;
       return `<label><input type="checkbox" class="cat" value="${c.value}"> ${labelText}</label>`;
     }).join('');
 
+    // legend: [체크박스][제목][(시리즈면)정렬토글]
     const baseToggle = isPersonalGroup
       ? `<span style="font-weight:800;">${g.label}</span> <span class="muted">(로컬저장소)</span>`
       : `<label class="group-toggle">
@@ -172,7 +132,7 @@ function renderGroups(){
            <span>${g.label}</span>
          </label>`;
 
-    const orderBtn = (!isPersonalGroup && series)
+    const orderBtn = (!isPersonalGroup && isSeries)
       ? `<button type="button" class="group-toggle order-toggle" data-group="${g.key}" aria-label="정렬 전환">
            ${getOrderMode(g.key)==='created' ? '등록순' : '최신순'}
          </button>`
@@ -186,7 +146,7 @@ function renderGroups(){
       ? `<div class="muted" style="margin:6px 4px 2px;">개인자료는 <b>단독 재생만</b> 가능합니다.</div>`
       : '';
 
-    const seriesAttr = series ? ' data-series="1"' : ' data-series="0"';
+    const seriesAttr = isSeries ? ' data-series="1"' : ' data-series="0"';
 
     return `
       <fieldset class="group" data-key="${g.key}"${seriesAttr}>
@@ -199,6 +159,7 @@ function renderGroups(){
 
   catsBox.innerHTML = html;
   bindGroupInteractions();
+
   // 시리즈 정렬 토글 핸들러
   catsBox.querySelectorAll('.order-toggle').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -207,11 +168,12 @@ function renderGroups(){
     });
   });
 }
+renderGroups();
 
 /* ========== parent/child sync ========== */
 function setParentStateByChildren(groupEl){
   const parent = groupEl.querySelector('.group-check');
-  if(!parent) return;
+  if(!parent) return; // personal: no parent
   const children = Array.from(groupEl.querySelectorAll('input.cat'));
   const total = children.length;
   const checked = children.filter(c=>c.checked).length;
@@ -226,13 +188,14 @@ function refreshAllParentStates(){
   catsBox.querySelectorAll('.group').forEach(setParentStateByChildren);
 }
 function computeAllSelected(){
-  // 전체선택: series/personal 제외
+  // 전체선택: 시리즈/개인 제외
   const real = Array.from(catsBox.querySelectorAll('.group[data-series="0"]:not([data-key="personal"]) input.cat'));
   return real.length>0 && real.every(c=>c.checked);
 }
 let allSelected=false;
 
 function bindGroupInteractions(){
+  // 그룹 체크
   catsBox.querySelectorAll('.group-check').forEach(parent=>{
     parent.addEventListener('change', ()=>{
       const groupEl = parent.closest('.group');
@@ -240,16 +203,19 @@ function bindGroupInteractions(){
       setParentStateByChildren(groupEl);
       allSelected = computeAllSelected();
       if (cbToggleAll) cbToggleAll.checked = allSelected;
+      // 일반 선택 시 personal 해제
       catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked').forEach(c=> c.checked=false);
     });
   });
 
+  // 자식 체크
   catsBox.querySelectorAll('input.cat').forEach(child=>{
     child.addEventListener('change', ()=>{
       const v = child.value;
       const isPersonal = isPersonalVal(v);
 
       if (isPersonal && child.checked){
+        // 개인 = 단독
         catsBox.querySelectorAll('.group[data-key="personal"] input.cat').forEach(c=>{ if(c!==child) c.checked=false; });
         catsBox.querySelectorAll('.group:not([data-key="personal"]) input.cat:checked').forEach(c=> c.checked=false);
       }
@@ -269,10 +235,12 @@ function bindGroupInteractions(){
 
 /* ========== 전체선택 & 상태 복구 ========== */
 function selectAll(on){
+  // 일반 카테고리만 대상
   catsBox
     .querySelectorAll('.group[data-series="0"]:not([data-key="personal"]) input.cat')
     .forEach(b => { b.checked = !!on; });
 
+  // 항상 해제: personal & series
   catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked, .group[data-series="1"] input.cat:checked')
     .forEach(c => { c.checked = false; });
 
@@ -288,18 +256,23 @@ function applySavedSelection(){
     selectAll(false);
     const set = new Set(saved);
     catsBox.querySelectorAll('.cat').forEach(ch=>{ if (set.has(ch.value)) ch.checked=true; });
+
+    // personal 단독 보정
     const personals = Array.from(catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked'));
     const normals   = Array.from(catsBox.querySelectorAll('.group:not([data-key="personal"]) input.cat:checked'));
     if (personals.length >= 1 && normals.length >= 1){
       personals.forEach(c=> c.checked=false);
-    }else if (personals.length >= 2){
+    } else if (personals.length >= 2){
       personals.slice(1).forEach(c=> c.checked=false);
     }
     refreshAllParentStates();
   }
+  // autonext 초기 반영
   const vv = (localStorage.getItem('autonext') || '').toLowerCase();
   if (cbAutoNext) cbAutoNext.checked = (vv==='1' || vv==='true' || vv==='on');
 }
+applySavedSelection();
+
 cbToggleAll?.addEventListener('change', ()=> selectAll(!!cbToggleAll.checked));
 
 /* ========== watch 이동 & list 직전 저장 ========== */
@@ -318,12 +291,14 @@ function persistSelectedCatsForList(){
 }
 
 btnWatch?.addEventListener('click', ()=>{
+  // index→watch: 항상 최신 큐로
   sessionStorage.removeItem('playQueue'); sessionStorage.removeItem('playIndex');
 
   const selected = Array.from(document.querySelectorAll('.cat:checked')).map(c=>c.value);
   const personals = selected.filter(isPersonalVal);
   const normals   = selected.filter(v=> !isPersonalVal(v));
 
+  // 개인자료 단독
   if (personals.length === 1 && normals.length === 0){
     localStorage.setItem('selectedCats', JSON.stringify(personals));
     localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
@@ -331,14 +306,16 @@ btnWatch?.addEventListener('click', ()=>{
     return;
   }
 
+  // 일반
   const isAll = computeAllSelected();
   const valueToSave = (normals.length===0 || isAll) ? "ALL" : normals;
   localStorage.setItem('selectedCats', JSON.stringify(valueToSave));
   localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
 
+  // 시리즈별 정렬 모드 힌트 저장 (watch/list에서 활용 가능)
   const seriesOrderHints = {};
   applyGroupOrder(CATEGORY_GROUPS).forEach(g=>{
-    if(isSeriesGroupKey(g.key)) seriesOrderHints[g.key] = getOrderMode(g.key);
+    if(isSeriesGroupKey(g.key)) seriesOrderHints[g.key] = getOrderMode(g.key); // 'created' | 'latest'
   });
   sessionStorage.setItem('seriesOrderHints', JSON.stringify(seriesOrderHints));
 
@@ -349,7 +326,7 @@ catTitleBtn?.addEventListener('click', ()=> location.href='category-order.html')
 
 /* ========== storage 리스너 ========== */
 window.addEventListener('storage', (e)=>{
-  if (e.key === 'personalLabels' || e.key === 'groupOrderV1' || e.key === 'seriesGroupKeys') {
+  if (e.key === 'personalLabels' || e.key === 'groupOrderV1') {
     renderGroups();
     applySavedSelection();
   }
@@ -470,13 +447,4 @@ initSwipeNav({ goLeftHref:'upload.html', goRightHref:'list.html', deadZoneCenter
     document.addEventListener('pointerup',   end,   { passive:true, capture:true });
   }
   initDragSwipe({ goLeftHref:'upload.html', goRightHref:'list.html', threshold:60, slop:45, timeMax:700, feel:1.0, deadZoneCenterRatio:0.15 });
-})();
-
-/* ===================== */
-/* 부팅 */
-/* ===================== */
-(async function boot(){
-  await loadCategories();      // categories 로딩(실패해도 페이지는 살아있게)
-  renderGroups();
-  applySavedSelection();
 })();
