@@ -1,35 +1,54 @@
-import { auth, db, googleProvider } from "./firebase-init.js";
-import { signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-import { doc, getDoc, setDoc, runTransaction } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+// kidsani / js/auth.js
+// v0.1.0 — 구글 로그인 전용으로 경량화
+// - 읽기 기능은 비로그인도 가능(페이지 로직에서 자유롭게 read)
+// - 쓰기(업로드/삭제 등)에서만 인증 요구
+// - copytube 원본과의 호환을 위해 doc/runTransaction/serverTimestamp 재수출 유지
 
-// 닉네임 형식: 한글/영문/숫자/밑줄 2~16자
-const NICK_RE = /^[가-힣A-Za-z0-9_]{2,16}$/;
+import { auth, db } from './firebase-init.js?v=0.1.0';
+export { auth, db };
 
-export async function signInWithGoogleAndClaimNick() {
-  const cred = await signInWithPopup(auth, googleProvider);
-  const uid = cred.user.uid;
+import {
+  onAuthStateChanged as _onAuthStateChanged,
+  signInWithPopup as _signInWithPopup,
+  signOut as _signOut,
+  GoogleAuthProvider,
+} from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
 
-  // 이미 users/{uid}가 있으면(닉네임 설정된 상태면) 바로 종료
-  const userRef = doc(db, "users", uid);
-  const snap = await getDoc(userRef);
-  if (snap.exists()) return cred.user;
+import {
+  doc, runTransaction, setDoc, serverTimestamp,
+} from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
 
-  // 최초 로그인: 닉네임 1회 입력
-  let nick = prompt("닉네임을 입력하세요 (2~16자, 한글/영문/숫자, 이후 변경 불가):");
-  nick = (nick || "").trim();
-  if (!NICK_RE.test(nick)) throw new Error("닉네임 형식이 올바르지 않습니다.");
+// re-export 필요한 firestore 유틸(페이지에서 쓰고 있음)
+export { doc, runTransaction, serverTimestamp };
 
-  // nicknames/{nick} 점유 + users/{uid} 생성 (트랜잭션)
-  const nickRef = doc(db, "nicknames", nick);
-  await runTransaction(db, async (tx) => {
-    const n = await tx.get(nickRef);
-    if (n.exists()) throw new Error("이미 사용 중인 닉네임입니다.");
-    tx.set(nickRef, { uid });
-    tx.set(userRef, { uid, nickname: nick, createdAt: new Date().toISOString() });
-  });
-
-  return cred.user;
+/* helpers */
+export function sanitizeNickname(raw){
+  const s = String(raw||'').trim();
+  if (!s) return '';
+  // 허용: 한글/영문/숫자/[-_.], 길이 2~20
+  if (!/^[\w가-힣\-_.]{2,20}$/.test(s)) return '';
+  return s;
 }
 
-export function onAuth(cb) { return onAuthStateChanged(auth, cb); }
-export async function doSignOut() { await signOut(auth); }
+// ✅ 구글 로그인 전용
+const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: "select_account" });
+
+export async function signInWithGoogle(){
+  const cred = await _signInWithPopup(auth, googleProvider);
+  return cred.user; // { uid, displayName, photoURL, email, ... }
+}
+
+/* auth wrappers */
+export const onAuthStateChanged = _onAuthStateChanged;
+export const signOut = _signOut;
+
+/* after signup/login: optionally create /users/{uid} profile */
+export async function ensureUserDoc(uid, displayName){
+  try{
+    await setDoc(doc(db,'users', uid), {
+      displayName: displayName || '회원',
+      updatedAt: serverTimestamp()
+    }, { merge:true });
+  }catch(e){ /* ignore */ }
+}
