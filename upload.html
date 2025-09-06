@@ -1,4 +1,4 @@
-<!-- upload.html (KidsAni v0.3.0) -->
+<!-- upload.html (KidsAni v0.3.1) -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -82,7 +82,6 @@
   <header id="topbar">
     <div class="brand">
       <a id="brandHome" href="./" aria-label="KidsAni 홈으로">
-        <!-- 프로젝트 이미지 경로는 그대로 사용 가능; 필요시 kidsani 전용 이미지로 교체 -->
         <img class="brand-logo" src="image/copytube_logo_side.png" alt="KidsAni"/>
       </a>
     </div>
@@ -98,6 +97,10 @@
         <button id="btnSignOut" type="button">Sign out</button>
         <button id="btnList" type="button">영상목록</button>
         <button id="btnGoUpload" class="menu-strong" type="button">추천영상등록</button>
+
+        <!-- ▶ 추가: Playlist URL 추출 (모달 오픈 트리거) -->
+        <hr class="sep"/>
+        <button id="menu-playlist-url" type="button">Playlist URL 추출</button>
       </div>
     </div>
   </header>
@@ -143,7 +146,38 @@
     </div>
   </main>
 
+  <!-- ===== Playlist URL 추출 모달 ===== -->
+  <dialog id="dlg-urlfind" class="urlfind-dialog">
+    <form method="dialog" class="panel">
+      <header>
+        <strong>Playlist URL 추출</strong>
+        <button type="submit" class="icon close" aria-label="닫기">✕</button>
+      </header>
+
+      <label class="block">
+        <span>재생목록 전체 URL</span>
+        <input type="text" id="uf_playlistUrl" placeholder="https://www.youtube.com/playlist?list=..." />
+      </label>
+
+      <label class="inline">
+        <input type="checkbox" id="uf_useShortUrl" />
+        <span>youtu.be 공유 URL 형식으로 출력</span>
+      </label>
+
+      <div class="row">
+        <button type="button" id="uf_extractBtn" class="btn-primary">URL 추출 시작</button>
+        <button type="button" id="uf_copyBtn" class="btn">클립보드 복사</button>
+        <button type="button" id="uf_downloadBtn" class="btn">TXT 다운로드</button>
+      </div>
+
+      <div id="uf_loading" class="muted hidden">추출 중입니다...</div>
+      <textarea id="uf_result" readonly placeholder="이곳에 동영상 URL 목록이 표시됩니다."></textarea>
+    </form>
+  </dialog>
+
   <!-- 로직 -->
   <script type="module" src="js/upload.js?v=0.3.0"></script>
+  <!-- 모달 로직 (ES 모듈) -->
+  <script type="module" src="js/urlfind.js?v=1.0"></script>
 </body>
 </html>
