@@ -5,8 +5,8 @@
 // - 보수적 옵션 초기화(구조분해 디폴트 제거)
 
 import { CATEGORY_GROUPS, isSeriesGroupKey, getSeriesOrderDefault } from './categories.js';
-import { auth } from './firebase-init.js?v=1.5.1';
-import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=1.5.1';
+import { auth } from './firebase-init.js';
+import { onAuthStateChanged, signOut as fbSignOut } from './auth.js';
 
 /* ===================== */
 /* 공통 상수/도우미 */
