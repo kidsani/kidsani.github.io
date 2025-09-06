@@ -1,33 +1,55 @@
-// js/index.js (v1.8.1) — KidsAni
-// - 'series' 단일 키가 아닌 여러 시리즈 그룹을 지원 (data-series 플래그 기반)
-// - 전체선택 시 personal/series 그룹 제외
-// - 시리즈별 정렬 칩(등록순/최신순) 단일 토글 + 로컬 저장(seriesSortPrefs)
-// - 기존 기능(연속재생, 드롭다운, 스와이프, 개인자료 단독선택 등) 유지
+// js/index.js (v1.9.0) — KidsAni
+// - 시리즈 정렬 칩을 등록순/최신순/가나다순(제목) 3단 토글로 확장
+// - 저장 키(seriesSortPrefs)는 그대로, 값만 "registered" | "latest" | "title" 지원
+// - 기존 기능(연속재생, 드롭다운, 스와이프, 개인자료 단독선택, 그룹 인디eterminate 등) 유지
 
 import { CATEGORY_GROUPS } from './categories.js?v=0.2.1';
 import { auth } from './firebase-init.js?v=0.1.0';
 import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.0';
 
 const GROUP_ORDER_KEY = 'groupOrderV1';
-const SERIES_SORT_PREFS_KEY = 'seriesSortPrefs'; // { [categoryValue]: "registered" | "latest" }
+const SERIES_SORT_PREFS_KEY = 'seriesSortPrefs'; // { [categoryValue]: "registered" | "latest" | "title" }
+const SERIES_MODES = ['registered','latest','title'];
 const isPersonalVal = (v)=> v==='personal1' || v==='personal2';
 
-/* ---------- series sort prefs ---------- */
+/* ---------- series sort prefs (3-state) ---------- */
 function loadSeriesPrefs(){
   try{ return JSON.parse(localStorage.getItem(SERIES_SORT_PREFS_KEY) || '{}'); }
   catch{ return {}; }
 }
 function saveSeriesPrefs(p){ localStorage.setItem(SERIES_SORT_PREFS_KEY, JSON.stringify(p||{})); }
-function getSeriesMode(prefs, catValue){
-  const m = prefs[catValue];
-  return (m === 'latest' || m === 'registered') ? m : 'registered';
+function normalizeMode(m){
+  return SERIES_MODES.includes(m) ? m : 'registered';
 }
-function toggleSeriesMode(prefs, catValue){
+function getSeriesMode(prefs, catValue){
+  return normalizeMode(prefs[catValue]);
+}
+function nextSeriesMode(cur){
+  const i = SERIES_MODES.indexOf(normalizeMode(cur));
+  return SERIES_MODES[(i+1) % SERIES_MODES.length];
+}
+function cycleSeriesMode(prefs, catValue){
   const cur = getSeriesMode(prefs, catValue);
-  const next = (cur === 'registered') ? 'latest' : 'registered';
-  prefs[catValue] = next;
+  const nxt = nextSeriesMode(cur);
+  prefs[catValue] = nxt;
   saveSeriesPrefs(prefs);
-  return next;
+  return nxt;
+}
+function modeLabel(m){
+  switch(normalizeMode(m)){
+    case 'latest': return '최신순';
+    case 'title' : return '가나다';
+    case 'registered':
+    default:       return '등록순';
+  }
+}
+function modeAria(m){
+  switch(normalizeMode(m)){
+    case 'latest': return '시리즈 정렬: 최신순';
+    case 'title' : return '시리즈 정렬: 가나다순';
+    case 'registered':
+    default:       return '시리즈 정렬: 등록순';
+  }
 }
 
 /* ---------- group order ---------- */
@@ -117,9 +139,10 @@ function renderGroups(){
       const labelText = isPersonalGroup && personalLabels[c.value] ? personalLabels[c.value] : c.label;
       const value = c.value;
 
-      // 시리즈 그룹일 때만 단일 칩 토글(등록순/최신순)
+      // 시리즈 그룹일 때만 단일 칩 토글(등록순/최신순/가나다)
+      const mode = getSeriesMode(seriesPrefs, value);
       const chip = isSeries
-        ? `<button type="button" class="chip-toggle" data-series-value="${value}" aria-label="정렬 전환">${getSeriesMode(seriesPrefs, value)==='latest' ? '최신순' : '등록순'}</button>`
+        ? `<button type="button" class="chip-toggle" data-series-value="${value}" aria-label="${modeAria(mode)}" title="정렬 전환: 등록순 → 최신순 → 가나다">${modeLabel(mode)}</button>`
         : '';
 
       return `
@@ -144,7 +167,6 @@ function renderGroups(){
       ? `<div class="muted" style="margin:6px 4px 2px;">시리즈와 개인자료는 <b>단독 재생만</b> 가능합니다.</div>`
       : '';
 
-    // 플래그 속성: true일 때만 추가
     const flags = [
       isPersonalGroup ? 'data-personal="true"' : '',
       isSeries ? 'data-series="true"' : ''
@@ -161,15 +183,17 @@ function renderGroups(){
 
   catsBox.innerHTML = html;
 
-  // 칩 토글 이벤트 (체크박스 토글과 충돌 방지)
+  // 칩 토글: 3단 사이클
   catsBox.querySelectorAll('.chip-toggle').forEach(chip=>{
     chip.addEventListener('click', (e)=>{
       e.preventDefault();
       e.stopPropagation();
       const value = chip.getAttribute('data-series-value');
       const prefs = loadSeriesPrefs();
-      const next = toggleSeriesMode(prefs, value);
-      chip.textContent = (next === 'latest') ? '최신순' : '등록순';
+      const next = cycleSeriesMode(prefs, value);
+      chip.textContent = modeLabel(next);
+      chip.setAttribute('aria-label', modeAria(next));
+      chip.setAttribute('title', '정렬 전환: 등록순 → 최신순 → 가나다');
     });
   });
 
@@ -195,7 +219,6 @@ function refreshAllParentStates(){
   catsBox.querySelectorAll('.group').forEach(setParentStateByChildren);
 }
 function computeAllSelected(){
-  // personal/series 플래그가 없는 '일반' 그룹만 대상으로 모두 선택됐는지 확인
   const real = Array.from(
     catsBox.querySelectorAll('.group:not([data-personal]):not([data-series]) input.cat')
   );
@@ -225,12 +248,11 @@ function bindGroupInteractions(){
       const isPersonal = isPersonalVal(v);
 
       if (isPersonal && child.checked){
-        // personal = single-mode: 다른 모든 항목 해제
+        // personal = single-mode
         catsBox.querySelectorAll('.group[data-personal] input.cat').forEach(c=>{ if(c!==child) c.checked=false; });
         catsBox.querySelectorAll('.group:not([data-personal]) input.cat:checked').forEach(c=> c.checked=false);
       }
       if (!isPersonal && child.checked){
-        // 일반/시리즈 선택 시 personal 해제
         catsBox.querySelectorAll('.group[data-personal] input.cat:checked').forEach(c=> c.checked=false);
       }
 
@@ -246,12 +268,10 @@ function bindGroupInteractions(){
 
 /* ---------- select all & load saved ---------- */
 function selectAll(on){
-  // 일반 그룹만 on/off (개인자료/시리즈 제외)
   catsBox
     .querySelectorAll('.group:not([data-personal]):not([data-series]) input.cat')
     .forEach(b => { b.checked = !!on; });
 
-  // personal/series는 항상 해제
   catsBox.querySelectorAll('.group[data-personal] input.cat:checked, .group[data-series] input.cat:checked')
     .forEach(c => { c.checked = false; });
 
@@ -268,7 +288,6 @@ function applySavedSelection(){
     const set = new Set(saved);
     catsBox.querySelectorAll('.cat').forEach(ch=>{ if (set.has(ch.value)) ch.checked=true; });
 
-    // personal 단독 보장
     const personals = Array.from(catsBox.querySelectorAll('.group[data-personal] input.cat:checked'));
     const normals   = Array.from(catsBox.querySelectorAll('.group:not([data-personal]) input.cat:checked'));
     if (personals.length >= 1 && normals.length >= 1){
@@ -278,7 +297,6 @@ function applySavedSelection(){
     }
     refreshAllParentStates();
   }
-  // 연속재생 초기 표시
   const vv = (localStorage.getItem('autonext') || '').toLowerCase();
   if (cbAutoNext) cbAutoNext.checked = (vv==='1' || vv==='true' || vv==='on');
 }
@@ -288,22 +306,19 @@ cbToggleAll?.addEventListener('change', ()=> selectAll(!!cbToggleAll.checked));
 
 /* ---------- go watch ---------- */
 btnWatch?.addEventListener('click', ()=>{
-  // list→watch 잔여 큐 무시: index→watch는 항상 최신부터 시작
   sessionStorage.removeItem('playQueue'); sessionStorage.removeItem('playIndex');
 
   const selected = Array.from(document.querySelectorAll('.cat:checked')).map(c=>c.value);
   const personals = selected.filter(isPersonalVal);
   const normals   = selected.filter(v=> !isPersonalVal(v));
 
-  // personal-only
   if (personals.length === 1 && normals.length === 0){
     localStorage.setItem('selectedCats', JSON.stringify(personals));
-    localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0'); // 통일
+    localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
     location.href = `watch.html?cats=${encodeURIComponent(personals[0])}`;
     return;
   }
 
-  // normal only
   const isAll = computeAllSelected();
   const valueToSave = (normals.length===0 || isAll) ? "ALL" : normals;
   localStorage.setItem('selectedCats', JSON.stringify(valueToSave));
@@ -356,7 +371,7 @@ function persistSelectedCatsForList(){
 }
 
 /* ===================== */
-/* 단순형 스와이프(중앙 30% 데드존) */
+/* 단순형 스와이프 */
 /* ===================== */
 function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZoneCenterRatio=0.30 } = {}){
   let sx=0, sy=0, t0=0, tracking=false;
@@ -407,7 +422,7 @@ function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZo
 initSwipeNav({ goLeftHref: 'upload.html', goRightHref: 'list.html', deadZoneCenterRatio: 0.30 });
 
 /* ===================== */
-/* 고급형 스와이프(끌리는 모션, 중앙 15% 데드존) */
+/* 고급형 스와이프 */
 /* ===================== */
 (function(){
   function initDragSwipe({ goLeftHref=null, goRightHref=null, threshold=60, slop=45, timeMax=700, feel=1.0, deadZoneCenterRatio=0.15 }={}){
