@@ -1,4 +1,4 @@
-<!-- upload.html (KidsAni v0.3.1) -->
+<!-- upload.html (KidsAni v0.3.2) -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -22,6 +22,27 @@
   ">
 
   <link rel="stylesheet" href="css/style.css"/>
+
+  <!-- ✅ 공통 헤드 스니펫: PWA Manifest / 파비콘 / 애플 아이콘 / iOS 메타 -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#000000">
+  <link rel="icon" type="image/png" sizes="192x192" href="image/kidsani_logo_192r.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="image/kidsani_logo_512r.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="image/kidsani_logo_192r.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="KidsAni">
+
+  <!-- ✅ Open Graph / Twitter 미리보기 -->
+  <meta property="og:title" content="추천영상 등록 - KidsAni" />
+  <meta property="og:description" content="유튜브 URL을 붙여넣고 카테고리를 선택해 KidsAni에 영상을 추천 등록하세요." />
+  <meta property="og:image" content="https://copytube.github.io/image/kidsani_logo_512r.png" />
+  <meta property="og:url" content="https://copytube.github.io/upload.html" />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="추천영상 등록 - KidsAni">
+  <meta name="twitter:description" content="유튜브 URL을 붙여넣고 카테고리를 선택해 KidsAni에 영상을 추천 등록하세요.">
+  <meta name="twitter:image" content="https://copytube.github.io/image/kidsani_logo_512r.png">
 
   <style>
     .controls-grid{
@@ -76,6 +97,18 @@
       border:1px solid #2a2a2a; background:#151515; color:#bfc6ce; cursor:pointer;
     }
     .muted{ color:#9aa0a6; font-size:12px; }
+    /* 모달 최소 스타일(페이지 종속) */
+    .urlfind-dialog{ border:0; border-radius:14px; padding:0; background:transparent; }
+    .urlfind-dialog::backdrop{ background:rgba(0,0,0,.6); }
+    .urlfind-dialog .panel{ background:#0f0f0f; color:#e5e7eb; border:1px solid #2a2a2a; border-radius:14px; padding:12px; width:min(680px, 92vw); }
+    .urlfind-dialog header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+    .urlfind-dialog .panel .row{ display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+    .urlfind-dialog input[type="text"]{ width:100%; padding:8px 10px; border:1px solid #333; border-radius:8px; background:#000; color:#fff; }
+    .urlfind-dialog textarea{ width:100%; min-height:220px; padding:10px; border:1px solid #333; border-radius:8px; background:#000; color:#fff; }
+    .urlfind-dialog .btn-primary{ padding:8px 12px; border-radius:10px; border:0; background:#4ea1ff; color:#fff; font-weight:800; cursor:pointer; }
+    .urlfind-dialog .btn{ padding:8px 12px; border-radius:10px; border:1px solid #2a2a2a; background:#151515; color:#fff; cursor:pointer; }
+    .urlfind-dialog .icon.close{ border:1px solid #2a2a2a; background:#151515; color:#ddd; border-radius:8px; padding:4px 8px; cursor:pointer; }
+    .sep{ border:0; border-top:1px solid #2a2a2a; margin:6px 0; }
   </style>
 </head>
 <body>
