@@ -1,6 +1,6 @@
 /* ---------- firebase-init.js (v0.1.0) ---------- */
 import { initializeApp }   from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js';
-import { getAuth }         from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js';
+import { getAuth, GoogleAuthProvider }         from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js';
 import { getFirestore }    from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
 
 // ✅ kidsani 프로젝트용 Firebase 설정
@@ -16,7 +16,7 @@ export const firebaseConfig = {
 export const app  = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db   = getFirestore(app);
-
+export const googleProvider = new GoogleAuthProvider();
 // 디버깅용 (필요시 주석 해제)
 // console.log('CONFIG', firebaseConfig);
 /* ---------- end of firebase-init.js (v0.1.0) ---------- */
