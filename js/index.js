@@ -1,8 +1,9 @@
-// js/index.js (v1.9.2-kidsani-complete)
-// - categories.js를 정식 import (필수)
-// - 드롭다운/상단바/카테고리 렌더/시리즈 토글/전체선택 제외/개인 단독/스와이프 전체 포함
+// js/index.js (v1.9.3-kidsani-full)
+// - categories.js를 정식 import (쿼리스트링 없음: ./categories.js)
+// - 드롭다운/상단바/카테고리 렌더/시리즈 토글/전체선택 제외/개인 단독/스와이프(단순형+고급형)/슬라이드CSS 전부 포함
+// - storage 변경(personalLabels, groupOrderV1, seriesGroupKeys) 핫리로드 반영
 
-import { CATEGORY_GROUPS, isSeriesGroupKey, getSeriesOrderDefault } from './categories.js?v=1.5.1';
+import { CATEGORY_GROUPS, isSeriesGroupKey, getSeriesOrderDefault } from './categories.js';
 import { auth } from './firebase-init.js?v=1.5.1';
 import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=1.5.1';
 
@@ -101,7 +102,7 @@ const catTitleBtn  = document.getElementById("btnOpenOrder");
 
 function safeGroups(){
   if (!Array.isArray(CATEGORY_GROUPS) || CATEGORY_GROUPS.length===0){
-    console.error('[KidsAni] CATEGORY_GROUPS empty. js/categories.js 배포/경로 확인');
+    console.error('[KidsAni] CATEGORY_GROUPS empty. js/categories.js 배포/경로 확인 필요');
     catsBox && (catsBox.innerHTML = `<div class="muted" style="padding:8px;">카테고리를 불러오지 못했습니다. <code>js/categories.js</code>를 확인해 주세요.</div>`);
     return [];
   }
@@ -326,7 +327,7 @@ catTitleBtn?.addEventListener('click', ()=> location.href='category-order.html')
 
 /* ========== storage 리스너 ========== */
 window.addEventListener('storage', (e)=>{
-  if (e.key === 'personalLabels' || e.key === 'groupOrderV1') {
+  if (e.key === 'personalLabels' || e.key === 'groupOrderV1' || e.key === 'seriesGroupKeys') {
     renderGroups();
     applySavedSelection();
   }
@@ -446,5 +447,5 @@ initSwipeNav({ goLeftHref:'upload.html', goRightHref:'list.html', deadZoneCenter
     document.addEventListener('pointermove', move,  { passive:false });
     document.addEventListener('pointerup',   end,   { passive:true, capture:true });
   }
-  initDragSwipe({ goLeftHref:'upload.html', goRightHref:'list.html', threshold:60, slop:45, timeMax:700, feel:1.0, deadZoneCenterRatio:0.15 });
+  initDragSwipe({ goLeftHref:'upload.html', goRightHref:'list.html', threshold:60, slop:45, timeMax:700, feel=1.0, deadZoneCenterRatio:0.15 });
 })();
