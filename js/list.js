@@ -1,97 +1,110 @@
-// js/list.js (v1.8.2) — 칩=이름 표시 + 닉네임 3행 표시, oEmbed(7일 캐시) 유지 + 무한 스크롤 + 필터 인지형 선로딩 + 스와이프 방향잠금 + 중앙 30% 데드존
-import { auth, db } from './firebase-init.js';
-import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=1.5.1';
-import { CATEGORY_GROUPS } from './categories.js?v=1.5.1';
+// js/list.js (v2.1.0) — KidsAni
+// 전략 A: 카테고리별 쿼리 → 병합
+// + 개인자료(localStorage) 모드 복원
+// - 개인자료: localStorage slot(personal1/2) 읽기(목록/검색/시청)
+// - 일반: Firestore (최신순) / 시리즈: seriesSortPrefs(등록/최신/가나다) 반영
+// - 카드 레이아웃: 좌(제목/칩/닉네임), 우(썸네일→watch)
+// - 검색, 무한 스크롤, 게스트/로그인 공통, 스와이프: 우→좌(index로만)
+
+import { auth, db } from './firebase-init.js?v=0.1.0';
+import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.0';
+import { CATEGORY_GROUPS } from './categories.js?v=1.6.0';
 import {
-  collection, getDocs, getDoc, doc, query, orderBy, limit, startAfter
+  collection, getDocs, getDoc, doc, query, where, orderBy, limit, startAfter
 } from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
 
 /* ---------- 전역 내비 중복 방지 플래그 ---------- */
 window.__swipeNavigating = window.__swipeNavigating || false;
 
-/* ---------- Topbar 로그인 상태 동기화 & 드롭다운 ---------- */
-const signupLink = document.getElementById('signupLink');
-const signinLink = document.getElementById('signinLink');
-const welcome    = document.getElementById('welcome');
-const menuBtn    = document.getElementById('menuBtn');
-const dropdown   = document.getElementById('dropdownMenu');
-const btnSignOut = document.getElementById('btnSignOut');
-const btnGoUpload= document.getElementById('btnGoUpload');
-const btnAbout   = document.getElementById('btnAbout');
-const btnList    = document.getElementById('btnList');
+/* ---------- Topbar ---------- */
+const signupLink   = document.getElementById('signupLink');
+const signinLink   = document.getElementById('signinLink');
+const welcome      = document.getElementById('welcome');
+const menuBtn      = document.getElementById('menuBtn');
+const dropdown     = document.getElementById('dropdownMenu');
+const btnSignOut   = document.getElementById('btnSignOut');
+const btnGoUpload  = document.getElementById('btnGoUpload');
+const btnAbout     = document.getElementById('btnAbout');
+const btnList      = document.getElementById('btnList');
+const btnMyUploads = document.getElementById('btnMyUploads');
+const btnNick      = document.getElementById('btnNick');
 
-let isMenuOpen = false;
-function openDropdown(){ if(!dropdown) return; isMenuOpen = true; dropdown.classList.remove('hidden'); requestAnimationFrame(()=> dropdown.classList.add('show')); }
-function closeDropdown(){ if(!dropdown) return; isMenuOpen = false; dropdown.classList.remove('show'); setTimeout(()=> dropdown.classList.add('hidden'), 180); }
+function openDropdown(){ dropdown?.classList.remove('hidden'); requestAnimationFrame(()=> dropdown?.classList.add('show')); }
+function closeDropdown(){ dropdown?.classList.remove('show'); setTimeout(()=> dropdown?.classList.add('hidden'), 180); }
 
-onAuthStateChanged(auth, (user) => {
+onAuthStateChanged(auth,(user)=>{
   const loggedIn = !!user;
   signupLink?.classList.toggle('hidden', loggedIn);
   signinLink?.classList.toggle('hidden', loggedIn);
   if (welcome) welcome.textContent = loggedIn ? `Welcome! ${user?.displayName || '회원'}` : '';
   closeDropdown();
 });
+menuBtn?.addEventListener('click',(e)=>{ e.stopPropagation(); dropdown?.classList.contains('hidden') ? openDropdown() : closeDropdown(); });
+document.addEventListener('pointerdown',(e)=>{ if(!dropdown || dropdown.classList.contains('hidden')) return; if(!e.target.closest('#dropdownMenu,#menuBtn')) closeDropdown(); }, true);
+document.addEventListener('keydown',(e)=>{ if(e.key==='Escape') closeDropdown(); });
+dropdown?.addEventListener('click',(e)=> e.stopPropagation());
 
-menuBtn?.addEventListener('click', (e)=>{ e.stopPropagation(); dropdown?.classList.contains('hidden') ? openDropdown() : closeDropdown(); });
-document.addEventListener('pointerdown', (e)=>{ if(!dropdown || dropdown.classList.contains('hidden')) return; if(!e.target.closest('#dropdownMenu,#menuBtn')) closeDropdown(); }, true);
-document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeDropdown(); });
-dropdown?.addEventListener('click', (e)=> e.stopPropagation());
-
-btnSignOut?.addEventListener('click', async ()=>{ if (!auth.currentUser) { location.href = 'signin.html'; return; } try { await fbSignOut(auth); } catch {} closeDropdown(); });
-btnGoUpload?.addEventListener('click', ()=>{ location.href = 'upload.html'; closeDropdown(); });
-btnAbout   ?.addEventListener('click', ()=>{ location.href = 'about.html';  closeDropdown(); });
-btnList    ?.addEventListener('click', ()=>{ location.href = 'list.html';   closeDropdown(); });
+btnSignOut ?.addEventListener('click', async ()=>{ if(!auth.currentUser){ location.href='signin.html'; return; } try{ await fbSignOut(auth);}catch{} closeDropdown(); });
+btnGoUpload?.addEventListener('click', ()=>{ location.href='upload.html'; closeDropdown(); });
+btnAbout   ?.addEventListener('click', ()=>{ location.href='about.html'; closeDropdown(); });
+btnList    ?.addEventListener('click', ()=>{ location.href='list.html'; closeDropdown(); });
+btnMyUploads?.addEventListener('click',()=>{ location.href='manage-uploads.html'; closeDropdown(); });
+btnNick    ?.addEventListener('click', ()=>{ location.href='nick.html'; closeDropdown(); });
 
 /* ---------- DOM ---------- */
 const $cards     = document.getElementById('cards');
-const $msg       = document.getElementById('msg') || document.getElementById('resultMsg');
+const $msg       = document.getElementById('msg');
 const $q         = document.getElementById('q');
 const $btnSearch = document.getElementById('btnSearch');
-const $btnClear  = document.getElementById('btnClear'); // optional
 const $btnMore   = document.getElementById('btnMore');
 
 /* ---------- 상태 ---------- */
-const PAGE_SIZE = 60;
-let allDocs   = [];
-let lastDoc   = null;
-let hasMore   = true;
+const PAGE_SIZE        = 48;   // 한 번에 목표 합계
+const PER_CAT_MIN_LOAD = 12;   // 카테고리당 최소 로드(초기)
+const SERIES_PREFS_KEY = 'seriesSortPrefs';
+
 let isLoading = false;
+let hasMore   = true;
+
+/* 전략 A 상태 */
+const loaders = [];   // [{ cat, isSeries, mode, cursor, exhausted, items:[] }]
+let merged    = [];   // 누적 병합 결과(표시 용)
 
 /* ---------- 유틸 ---------- */
-function getSelectedCats(){
-  try {
-    const raw = localStorage.getItem('selectedCats');
-    const v = JSON.parse(raw || '[]');
-    return Array.isArray(v) ? v : [];
-  } catch { return []; }
-}
-function esc(s=''){ return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
-function extractId(url=''){
-  const m = String(url).match(/(?:youtu\.be\/|v=|shorts\/|embed\/)([^?&\/]+)/);
-  return m ? m[1] : '';
-}
-function toThumb(url, fallback=''){
-  const id = extractId(url);
-  return id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : fallback;
-}
-
-/* ---- 카테고리 라벨: 이름(라벨) 반환 ---- */
- const LABEL_MAP = (() => {
-   const m = {};
-   try {
-     CATEGORY_GROUPS.forEach(g => g?.children?.forEach(c => {
-       if (c?.value) m[c.value] = c.label || c.value;
-     }));
-   } catch {}
-   return m;
- })();
-
- function getLabel(key){ return LABEL_MAP[key] || key; }
-
 function setStatus(t){ if($msg) $msg.textContent = t || ''; }
 function toggleMore(show){ if($btnMore) $btnMore.style.display = show ? '' : 'none'; }
+function esc(s=''){ return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
 
-/* ---------- 제목 캐시(oEmbed, 7일) + 임시메모리 ---------- */
+function extractId(url=''){ const m = String(url).match(/(?:youtu\.be\/|v=|shorts\/|embed\/)([^?&\/]+)/); return m ? m[1] : ''; }
+function toThumb(url,fallback=''){ const id=extractId(url); return id?`https://i.ytimg.com/vi/${id}/hqdefault.jpg`:fallback; }
+
+/* 카테고리 라벨 */
+const LABEL_MAP = (()=>{ const m={}; CATEGORY_GROUPS.forEach(g=> g.children?.forEach(c=> { if(c?.value) m[c.value]=c.label||c.value; })); return m; })();
+function getLabel(key){ return LABEL_MAP[key]||key; }
+
+/* 선택 카테고리 */
+function readSelectedCats(){
+  try{
+    const raw = localStorage.getItem('selectedCats');
+    const v = JSON.parse(raw || 'ALL');
+    if (v === 'ALL') return 'ALL';
+    return Array.isArray(v) ? v : 'ALL';
+  }catch{ return 'ALL'; }
+}
+
+/* 시리즈/개인 구분 */
+const SERIES_VALUES = new Set(CATEGORY_GROUPS.filter(g=>g.series).flatMap(g=> g.children?.map(c=>c.value) || []));
+const PERSONAL_VALUES = new Set(CATEGORY_GROUPS.filter(g=>g.personal).flatMap(g=> g.children?.map(c=>c.value) || []));
+const ALL_NORMAL_VALUES = CATEGORY_GROUPS.filter(g=> !g.series && !g.personal).flatMap(g=> g.children?.map(c=>c.value) || []);
+
+/* seriesSortPrefs */
+function loadSeriesPrefs(){ try{ return JSON.parse(localStorage.getItem(SERIES_PREFS_KEY) || '{}'); }catch{ return {}; } }
+function getSeriesModeFor(cat){
+  const m = loadSeriesPrefs()?.[cat];
+  return (m==='latest'||m==='registered'||m==='title') ? m : 'registered';
+}
+
+/* ---------- YouTube 제목 oEmbed 캐시(7일) ---------- */
 const TitleCache = {
   get(id){
     try{
@@ -121,53 +134,37 @@ async function fetchYouTubeTitleById(id){
     if(!res.ok) throw 0;
     const data = await res.json();
     const title = data?.title ? String(data.title) : null;
-    if(title){
-      TitleCache.set(id, title);
-      lazyTitleMap.set(id, title);
-    }
+    if(title){ TitleCache.set(id, title); lazyTitleMap.set(id, title); }
     return title;
   }catch{ return null; }
 }
 async function hydrateTitleIfNeeded(titleEl, url, existingTitle){
   if(!titleEl) return;
   if(existingTitle && existingTitle !== '(제목 없음)') return;
-  const id = extractId(url);
-  if(!id) return;
+  const id = extractId(url); if(!id) return;
   const t = await fetchYouTubeTitleById(id);
   if(t) titleEl.textContent = t;
 }
 
 /* ---------- 닉네임 캐시 ---------- */
 const NickCache = {
-  map: new Map(), // uid -> string (nickname/displayName) or ''(미상)
+  map: new Map(), // uid -> string
   get(uid){ return this.map.get(uid) || ''; },
   set(uid, name){ if(uid) this.map.set(uid, String(name||'')); }
 };
-
-function ownerUidOf(d = {}){
-  return d?.ownerUid || d?.uid || d?.userUid || null;
-}
-
+function ownerUidOf(d = {}){ return d?.ownerUid || d?.uid || d?.userUid || null; }
 async function preloadNicknamesFor(docs){
-  // docs: [{id, data}]
   const uids = new Set();
-  docs.forEach(x => {
-    const uid = ownerUidOf(x.data);
-    if (uid && !NickCache.map.has(uid)) uids.add(uid);
-  });
+  docs.forEach(x => { const uid = ownerUidOf(x.data); if (uid && !NickCache.map.has(uid)) uids.add(uid); });
   if (!uids.size) return;
-
-  const tasks = [...uids].map(async (uid) => {
+  await Promise.all([...uids].map(async (uid) => {
     try{
       const snap = await getDoc(doc(db, 'users', uid));
       const prof = snap.exists() ? snap.data() : null;
       const name = prof?.nickname || prof?.displayName || '';
       NickCache.set(uid, name);
-    }catch{
-      NickCache.set(uid, '');
-    }
-  });
-  await Promise.all(tasks);
+    }catch{ NickCache.set(uid, ''); }
+  }));
 }
 
 /* ---------- 개인자료 모드 ---------- */
@@ -175,21 +172,16 @@ function isPersonalOnlySelection(){
   try{
     const raw = localStorage.getItem('selectedCats');
     const v = JSON.parse(raw || '[]');
-    return Array.isArray(v) && v.length === 1 && (v[0] === 'personal1' || v[0] === 'personal2');
+    return Array.isArray(v) && v.length === 1 && PERSONAL_VALUES.has(v[0]);
   }catch{ return false; }
 }
 function getPersonalSlot(){
-  try{
-    const v = JSON.parse(localStorage.getItem('selectedCats') || '[]');
-    return Array.isArray(v) ? v[0] : null;
-  }catch{ return null; }
+  try{ const v = JSON.parse(localStorage.getItem('selectedCats') || '[]'); return Array.isArray(v) ? v[0] : null; }
+  catch{ return null; }
 }
 function readPersonalItems(slot){
-  const key = `copytube_${slot}`;
-  try{
-    const arr = JSON.parse(localStorage.getItem(key) || '[]');
-    return Array.isArray(arr) ? arr : [];
-  }catch{ return []; }
+  try{ const arr = JSON.parse(localStorage.getItem(`copytube_${slot}`) || '[]'); return Array.isArray(arr) ? arr : []; }
+  catch{ return []; }
 }
 function getPersonalLabel(slot){
   try{
@@ -197,28 +189,32 @@ function getPersonalLabel(slot){
     return labels?.[slot] || (slot === 'personal1' ? '개인자료1' : '개인자료2');
   }catch{ return slot; }
 }
-
 function renderPersonalList(){
   const slot  = getPersonalSlot();
   const items = readPersonalItems(slot);
   const label = getPersonalLabel(slot);
 
   $cards.innerHTML = '';
-  if (!items.length){
-    $cards.innerHTML = `<div style="padding:14px;border:1px dashed var(--border,#333);border-radius:12px;color:#cfcfcf;">${esc(label)}에 저장된 영상이 없습니다.</div>`;
-    toggleMore(false);
-    setStatus('0개');
-    return;
+  const q = ($q?.value || '').trim().toLowerCase();
+  let list = items.slice();
+  if(q){
+    list = list.filter(it =>
+      String(it.title||'').toLowerCase().includes(q) ||
+      String(it.url||'').toLowerCase().includes(q)
+    );
+  }
+
+  if (!list.length){
+    $cards.innerHTML = `<div style="padding:14px;border:1px dashed var(--border);border-radius:12px;color:#cfcfcf;">${esc(label)}에 저장된 영상이 없습니다.</div>`;
+    toggleMore(false); setStatus('0개'); return;
   }
 
   const frag = document.createDocumentFragment();
-  const sorted = items.slice().sort((a,b)=> (b?.savedAt||0) - (a?.savedAt||0));
-
-  sorted.forEach((it, idx)=>{
+  list.forEach((it, idx)=>{
     const title = it.title || '(제목 없음)';
     const url   = it.url   || '';
     const id    = extractId(url);
-    const thumb = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+    const thumb = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : '';
 
     const card = document.createElement('article');
     card.className = 'card';
@@ -232,23 +228,20 @@ function renderPersonalList(){
         <div class="thumb-wrap"><img class="thumb" src="${esc(thumb)}" alt="썸네일" loading="lazy"></div>
       </div>
     `;
-    hydrateTitleIfNeeded(card.querySelector('.title'), url, title);
-
-    card.querySelector('.left') ?.addEventListener('click', ()=> openInWatchPersonal(sorted, idx, slot, label));
-    card.querySelector('.thumb')?.addEventListener('click', ()=> openInWatchPersonal(sorted, idx, slot, label));
+    card.querySelector('.left') ?.addEventListener('click', ()=> openInWatchPersonal(list, idx, slot, label));
+    card.querySelector('.thumb')?.addEventListener('click', ()=> openInWatchPersonal(list, idx, slot, label));
     frag.appendChild(card);
   });
 
   $cards.appendChild(frag);
   toggleMore(false);
-  setStatus(`총 ${items.length}개`);
+  setStatus(`총 ${list.length}개`);
 }
-
 function openInWatchPersonal(items, index, slot, label){
-  const queue = items.map((it, i)=> ({
+  const queue = items.map((it,i)=>({
     id: `local-${slot}-${i}`,
     url: it.url || '',
-    title: it.title || lazyTitleMap.get(extractId(it.url||'')) || '(제목 없음)',
+    title: it.title || '(제목 없음)',
     cats: [label]
   }));
   sessionStorage.setItem('playQueue', JSON.stringify(queue));
@@ -256,105 +249,155 @@ function openInWatchPersonal(items, index, slot, label){
   location.href = `watch.html?idx=${index}&cats=${encodeURIComponent(slot)}`;
 }
 
-/* ---------- 필터 공통 ---------- */
-function filterDocs(){
-  const cats = getSelectedCats();
-  const q = ($q?.value || '').trim().toLowerCase();
+/* ---------- Firestore(일반/시리즈) : 전략 A ---------- */
+function buildLoaders(){
+  loaders.length = 0;
+  const sel = readSelectedCats();
 
-  let list = allDocs.slice();
+  let targets = [];
+  if (sel === 'ALL'){
+    targets = ALL_NORMAL_VALUES.slice(); // 일반 전체 (시리즈/개인 제외)
+  } else {
+    targets = sel.filter(v => !PERSONAL_VALUES.has(v)); // 개인 제외
+  }
 
-  if (Array.isArray(cats) && cats.length){
-    list = list.filter(x => {
-      const arr = Array.isArray(x.data?.categories) ? x.data.categories : [];
-      return arr.some(v => cats.includes(v));
-    });
+  // 중복 제거
+  targets = [...new Set(targets)];
+
+  for (const cat of targets){
+    const isSeries = SERIES_VALUES.has(cat);
+    const mode = isSeries ? getSeriesModeFor(cat) : 'latest'; // 일반은 최신 고정
+    loaders.push({ cat, isSeries, mode, cursor:null, exhausted:false, items:[] });
   }
-  if (q){
-    list = list.filter(x => {
-      const id = extractId(x.data?.url || '');
-      const t = String(x.data?.title || lazyTitleMap.get(id) || '').toLowerCase();
-      const u = String(x.data?.url || '').toLowerCase();
-      return t.includes(q) || u.includes(q);
-    });
-  }
-  return list;
 }
 
-/* ---------- Firestore 로드 ---------- */
-async function loadPage(){
-  if(isLoading || !hasMore) return false;
-  isLoading = true;
-  setStatus(allDocs.length ? `총 ${allDocs.length}개 불러옴 · 더 불러오는 중…` : '불러오는 중…');
+async function loadOneLoader(ld, perCatLimit){
+  if (ld.exhausted) return [];
 
-  let batch = [];
-  try {
-    const parts = [ orderBy('createdAt','desc') ];
-    if (lastDoc) parts.push(startAfter(lastDoc));
-    parts.push(limit(PAGE_SIZE));
+  const parts = [ where('categories','array-contains', ld.cat) ];
+  // 정렬
+  if (ld.isSeries){
+    if (ld.mode === 'title'){
+      parts.push(orderBy('title','asc'));
+    } else if (ld.mode === 'registered'){
+      parts.push(orderBy('createdAt','asc'));
+    } else { // latest
+      parts.push(orderBy('createdAt','desc'));
+    }
+  } else {
+    parts.push(orderBy('createdAt','desc'));
+  }
 
-    const snap = await getDocs(query(collection(db,'videos'), ...parts));
-    if (snap.empty) { hasMore = false; toggleMore(false); setStatus(allDocs.length ? `총 ${allDocs.length}개` : '등록된 영상이 없습니다.'); isLoading=false; return false; }
+  if (ld.cursor) parts.push(startAfter(ld.cursor));
+  parts.push(limit(perCatLimit));
 
-    batch = snap.docs.map(d => ({ id: d.id, data: d.data() }));
-    allDocs = allDocs.concat(batch);
-    lastDoc = snap.docs[snap.docs.length-1] || lastDoc;
-    if (snap.size < PAGE_SIZE) hasMore = false;
-  } catch (e) {
-    console.warn('[list] fallback:', e?.message || e);
-    try {
-      const snap = await getDocs(query(collection(db,'videos'), limit(PAGE_SIZE*3)));
-      const arr = snap.docs.map(d => ({ id:d.id, data:d.data(), _t:(d.data()?.createdAt?.toMillis?.()||0) }));
-      arr.sort((a,b)=> b._t - a._t);
-      batch = arr.map(({_t,...rest})=>rest);
-      allDocs = allDocs.concat(batch);
-      hasMore = false;
-    } catch(e2){
-      console.error('[list] load failed:', e2);
-      setStatus('목록을 불러오지 못했습니다.');
-      toggleMore(false);
-      isLoading=false;
-      return false;
+  const snap = await getDocs(query(collection(db,'videos'), ...parts));
+  if (snap.empty){ ld.exhausted = true; return []; }
+
+  const batch = snap.docs.map(d => ({ id:d.id, data:d.data(), _created:(d.data()?.createdAt?.toMillis?.()||0) }));
+  ld.cursor = snap.docs[snap.docs.length-1];
+  ld.items = ld.items.concat(batch);
+  return batch;
+}
+
+// 새로 꺼낸 아이템 조각(Chunk)을 merged에 추가
+function takeMergedChunkAndAppend(){
+  // 시리즈 로더와 일반 로더 분리
+  const seriesLoaders = loaders.filter(l=> l.isSeries);
+  const normalLoaders = loaders.filter(l=> !l.isSeries);
+
+  // 시리즈끼리 라운드-로빈
+  const seriesChunk = [];
+  let progressed = true;
+  while (progressed){
+    progressed = false;
+    for (const l of seriesLoaders){
+      if (!l.items.length) continue;
+      seriesChunk.push(l.items.shift());
+      progressed = true;
     }
   }
 
-  // ★ 신규: 배치 내 uploader 닉네임 미리 불러오기
-  await preloadNicknamesFor(batch);
+  // 일반은 모두 모아 최신순 정렬
+  const normalsChunk = [];
+  normalLoaders.forEach(l => { if (l.items.length) normalsChunk.push(...l.items.splice(0)); });
+  normalsChunk.sort((a,b)=> b._created - a._created);
 
-  render();
+  const newChunk = seriesChunk.concat(normalsChunk);
+  if (newChunk.length) merged = merged.concat(newChunk);
+
+  // 남은 게 있는지 확인
+  const anyBuffered = loaders.some(l => l.items.length > 0);
+  const anyAlive    = loaders.some(l => !l.exhausted);
+  hasMore = anyBuffered || anyAlive;
+
   toggleMore(hasMore);
-  setStatus(`총 ${allDocs.length}개`);
-  isLoading = false;
-  return true;
+  setStatus(`총 ${merged.length}개`);
+  return newChunk;
 }
 
-/* ---------- 필터 인지형 선로딩(최소 PAGE_SIZE 보장 시도) ---------- */
-async function ensureMinFiltered(min = PAGE_SIZE){
-  if (isPersonalOnlySelection()) return;
+async function ensureAtLeast(totalTarget = PAGE_SIZE, perCatMin = PER_CAT_MIN_LOAD){
+  if (isLoading) return;
+  isLoading = true;
+  setStatus(merged.length ? `총 ${merged.length}개 불러옴 · 더 불러오는 중…` : '불러오는 중…');
 
-  let filtered = filterDocs();
+  const alive = loaders.filter(l=> !l.exhausted);
+  if (!alive.length && loaders.every(l => !l.items.length)){
+    hasMore = false; toggleMore(false);
+    setStatus(merged.length ? `총 ${merged.length}개` : '등록된 영상이 없습니다.');
+    isLoading = false; return;
+  }
+
+  // 1차: 각 로더에서 최소 확보
+  await Promise.all(alive.map(l => loadOneLoader(l, perCatMin).catch(()=>[])));
+
+  // 2차: 부족하면 라운드로 추가
+  const want = ()=> merged.length + loaders.reduce((acc,l)=> acc + l.items.length, 0);
   let guard = 0;
-  while (filtered.length < min && hasMore && guard < 5){
-    const ok = await loadPage();
-    if (!ok) break;
-    filtered = filterDocs();
+  while (want() < totalTarget && loaders.some(l=>!l.exhausted) && guard < 6){
+    for (const l of loaders){
+      if (want() >= totalTarget) break;
+      if (l.exhausted) continue;
+      try{ await loadOneLoader(l, Math.max(6, Math.ceil(perCatMin/2))); }catch{}
+    }
     guard++;
   }
-  render();
-  toggleMore(hasMore);
+
+  // 병합하여 merged에 추가
+  const before = merged.length;
+  const newChunk = takeMergedChunkAndAppend();
+
+  // 닉네임 프리로드(신규분에 대해)
+  try{ await preloadNicknamesFor(newChunk); }catch{}
+
+  setStatus(`총 ${merged.length}개`);
+  isLoading = false;
 }
 
-/* ---------- 렌더 ---------- */
-function render(){
-  if (isPersonalOnlySelection()){
-    renderPersonalList();
-    return;
-  }
+/* ---------- 검색 & 렌더 ---------- */
+function filterSearch(list){
+  const q = ($q?.value || '').trim().toLowerCase();
+  if (!q) return list;
+  return list.filter(x => {
+    const d = x.data || {};
+    const url = String(d.url || '').toLowerCase();
+    const id  = extractId(d.url || '');
+    const tt  = String(d.title || lazyTitleMap.get(id) || '').toLowerCase();
+    const uid = ownerUidOf(d);
+    const nick= (NickCache.get(uid) || '').toLowerCase();
+    const domain = (()=>{ try{ const u = new URL(d.url); return u.hostname.toLowerCase(); }catch{ return ''; }})();
+    return tt.includes(q) || url.includes(q) || nick.includes(q) || domain.includes(q);
+  });
+}
 
-  const list = filterDocs();
+function render(){
+  if (isPersonalOnlySelection()){ renderPersonalList(); return; }
+
+  const list = filterSearch(merged);
 
   $cards.innerHTML = '';
   if (!list.length){
-    $cards.innerHTML = `<div style="padding:14px;border:1px dashed var(--border,#333);border-radius:12px;color:#cfcfcf;">결과가 없습니다.</div>`;
+    $cards.innerHTML = `<div style="padding:14px;border:1px dashed var(--border);border-radius:12px;color:#cfcfcf;">결과가 없습니다.</div>`;
     return;
   }
 
@@ -373,27 +416,28 @@ function render(){
     const card = document.createElement('article');
     card.className = 'card';
     card.innerHTML = `
-      <div class="left">
+      <div class="left" aria-label="영상 열기: ${esc(title)}">
         <div class="title" title="${esc(title)}">${esc(title)}</div>
         <div class="chips">${chipsHTML}</div>
         <div class="meta">등록: ${esc(nick)}</div>
       </div>
       <div class="right">
-        <div class="thumb-wrap"><img class="thumb" src="${esc(thumb)}" alt="썸네일" loading="lazy"></div>
+        <div class="thumb-wrap"><img class="thumb" src="${esc(thumb)}" alt="썸네일" loading="lazy" decoding="async"></div>
       </div>
     `;
 
     hydrateTitleIfNeeded(card.querySelector('.title'), url, title);
 
-    card.querySelector('.left') ?.addEventListener('click', ()=> openInWatch(list, idx));
-    card.querySelector('.thumb')?.addEventListener('click', ()=> openInWatch(list, idx));
+    const open = ()=> openInWatch(list, idx);
+    card.querySelector('.left') ?.addEventListener('click', open);
+    card.querySelector('.thumb')?.addEventListener('click', open);
 
     frag.appendChild(card);
   });
   $cards.appendChild(frag);
 }
 
-/* ---------- watch로 이동(큐 + 인덱스 + doc + cats 파라미터) ---------- */
+/* ---------- watch로 이동(현재 렌더 순서 기준 큐) ---------- */
 function openInWatch(list, index){
   const queue = list.map(x => {
     const id = extractId(x.data?.url || '');
@@ -420,76 +464,49 @@ function openInWatch(list, index){
   location.href = `watch.html?doc=${docId}&idx=${index}${catsParam}`;
 }
 
-/* ---------- 검색 이벤트 ---------- */
-$q?.addEventListener('keydown', async (e)=>{
-  if(e.key==='Enter'){
-    e.preventDefault();
-    if(isPersonalOnlySelection()){ renderPersonalList(); return; }
-    render();
-    await ensureMinFiltered(PAGE_SIZE);
-  }
-});
-$btnSearch?.addEventListener('click', async ()=>{
-  if(isPersonalOnlySelection()){ renderPersonalList(); return; }
-  render();
-  await ensureMinFiltered(PAGE_SIZE);
-});
-$btnClear ?.addEventListener('click', async ()=>{
-  if($q) $q.value='';
-  if(isPersonalOnlySelection()){ renderPersonalList(); return; }
-  render();
-  await ensureMinFiltered(PAGE_SIZE);
-});
+/* ---------- 이벤트 ---------- */
+$q?.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); render(); }});
+$btnSearch?.addEventListener('click', ()=> render());
 $btnMore  ?.addEventListener('click', async ()=>{
   $btnMore.disabled = true; $btnMore.textContent = '불러오는 중…';
-  try {
-    await loadPage();
-    await ensureMinFiltered(PAGE_SIZE);
+  try{
+    await ensureAtLeast(PAGE_SIZE, PER_CAT_MIN_LOAD);
+    render();
   } finally {
-    $btnMore.disabled=false; $btnMore.textContent='더 보기';
+    $btnMore.disabled = false; $btnMore.textContent = '더 보기';
   }
 });
 
-/* ---------- 시작 ---------- */
+/* ---------- 초기화 ---------- */
 (async function init(){
   try{
     if (isPersonalOnlySelection()){
       renderPersonalList();
       return;
     }
-    await loadPage();
-    await ensureMinFiltered(PAGE_SIZE);
+    buildLoaders();
+    await ensureAtLeast(PAGE_SIZE, PER_CAT_MIN_LOAD);
+    render();
+    toggleMore(hasMore);
   }catch(e){
-    console.error(e);
+    console.error('[list] init error', e);
     setStatus('목록을 불러오지 못했습니다.');
   }
 })();
 
-/* ---------- 무한 스크롤 ---------- */
+/* ---------- 스크롤 하단 근접 시 추가 로드 ---------- */
 const SCROLL_LOAD_OFFSET = 320;
 window.addEventListener('scroll', async ()=>{
   if (isLoading || !hasMore) return;
   const nearBottom = (window.innerHeight + window.scrollY) >= (document.body.offsetHeight - SCROLL_LOAD_OFFSET);
   if (!nearBottom) return;
-  if (isPersonalOnlySelection()) return;
 
-  const before = filterDocs().length;
-  const ok = await loadPage();
-  if (!ok) return;
-
-  let guard=0;
-  while (filterDocs().length < PAGE_SIZE && hasMore && guard < 2){
-    const ok2 = await loadPage();
-    if(!ok2) break;
-    guard++;
-  }
-
-  const after = filterDocs().length;
-  if (after > before) render();
+  await ensureAtLeast(PAGE_SIZE, Math.max(8, Math.floor(PER_CAT_MIN_LOAD/2)));
+  render();
 }, { passive:true });
 
 /* ===================== */
-/* Slide-out CSS (단순형/백업용) */
+/* Slide-out CSS (백업용) */
 /* ===================== */
 (function injectSlideCSS(){
   if (document.getElementById('slide-css-152')) return;
@@ -508,47 +525,31 @@ window.addEventListener('scroll', async ()=>{
 })();
 
 /* ===================== */
-/* 단순형 스와이프 (중앙 30% 데드존 추가) */
+/* 스와이프: 우→좌(index로), 반대쪽 차단 */
 /* ===================== */
 function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZoneCenterRatio=0.30 } = {}){
   let sx=0, sy=0, t0=0, tracking=false;
-  const THRESH_X = 70;
-  const MAX_OFF_Y = 80;
-  const MAX_TIME  = 600;
-
+  const THRESH_X = 70, MAX_OFF_Y = 80, MAX_TIME = 600;
   const getPoint = (e) => e.touches?.[0] || e.changedTouches?.[0] || e;
 
   function onStart(e){
-    const p = getPoint(e);
-    if(!p) return;
-
+    const p = getPoint(e); if(!p) return;
     const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
     const dz = Math.max(0, Math.min(0.9, deadZoneCenterRatio));
-    const L  = vw * (0.5 - dz/2);
-    const R  = vw * (0.5 + dz/2);
+    const L  = vw * (0.5 - dz/2), R = vw * (0.5 + dz/2);
     if (p.clientX >= L && p.clientX <= R) { tracking = false; return; }
-
     sx = p.clientX; sy = p.clientY; t0 = Date.now(); tracking = true;
   }
   function onEnd(e){
     if(!tracking) return; tracking = false;
-
     if (window.__swipeNavigating) return;
-
     const p = getPoint(e);
-    const dx = p.clientX - sx;
-    const dy = p.clientY - sy;
-    const dt = Date.now() - t0;
+    const dx = p.clientX - sx, dy = p.clientY - sy, dt = Date.now() - t0;
     if (Math.abs(dy) > MAX_OFF_Y || dt > MAX_TIME) return;
-
     if (dx <= -THRESH_X && goLeftHref){
       window.__swipeNavigating = true;
       document.documentElement.classList.add('slide-out-left');
       setTimeout(()=> location.href = goLeftHref, animateMs);
-    } else if (dx >= THRESH_X && goRightHref){
-      window.__swipeNavigating = true;
-      document.documentElement.classList.add('slide-out-right');
-      setTimeout(()=> location.href = goRightHref, animateMs);
     }
   }
   document.addEventListener('touchstart', onStart, { passive:true });
@@ -556,15 +557,11 @@ function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZo
   document.addEventListener('pointerdown',onStart, { passive:true });
   document.addEventListener('pointerup',  onEnd,   { passive:true });
 }
-
-// ✅ list: 우→좌 = index (단순형 + 중앙 데드존 30%)
 initSwipeNav({ goLeftHref: 'index.html', goRightHref: null, deadZoneCenterRatio: 0.30 });
 
-/* ===================== */
-/* 고급형 스와이프 — 끌리는 모션 + 방향 잠금 + 중앙 30% 데드존 */
-/* ===================== */
+/* 끌리는 모션(오른쪽 이동 차단) */
 (function(){
-  function initDragSwipe({ goLeftHref=null, goRightHref=null, threshold=60, slop=45, timeMax=700, feel=1.0, deadZoneCenterRatio=0.15 }={}){
+  function initDragSwipe({ goLeftHref=null, threshold=60, slop=45, timeMax=700, feel=1.0, deadZoneCenterRatio=0.15 }={}){
     const page = document.querySelector('main') || document.body;
     if(!page) return;
 
@@ -589,8 +586,7 @@ initSwipeNav({ goLeftHref: 'index.html', goRightHref: null, deadZoneCenterRatio:
 
       const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
       const dz = Math.max(0, Math.min(0.9, deadZoneCenterRatio));
-      const L  = vw * (0.5 - dz/2);
-      const R  = vw * (0.5 + dz/2);
+      const L  = vw * (0.5 - dz/2), R = vw * (0.5 + dz/2);
       if (t.clientX >= L && t.clientX <= R) return;
 
       x0 = t.clientX; y0 = t.clientY; t0 = Date.now();
@@ -602,30 +598,13 @@ initSwipeNav({ goLeftHref: 'index.html', goRightHref: null, deadZoneCenterRatio:
       if(!active) return;
       const t = (e.touches && e.touches[0]) || (e.pointerType ? e : null);
       if(!t) return;
-
       const dx = t.clientX - x0;
       const dy = t.clientY - y0;
-
-      if(Math.abs(dy) > slop){
-        canceled = true; active = false;
-        reset(true);
-        return;
-      }
-
-      const allowLeft  = !!goLeftHref;
-      const allowRight = !!goRightHref;
-
-      let dxAdj = dx;
-      if (dx < 0 && !allowLeft)  dxAdj = 0;
-      if (dx > 0 && !allowRight) dxAdj = 0;
-
-      if (dxAdj === 0){
-        page.style.transform = 'translateX(0px)';
-        return;
-      }
-
+      if(Math.abs(dy) > slop){ canceled = true; active = false; reset(true); return; }
+      // 오른쪽 이동(없음) 차단
+      if (dx > 0){ page.style.transform = 'translateX(0px)'; return; }
       e.preventDefault();
-      page.style.transform = 'translateX(' + (dxAdj * feel) + 'px)';
+      page.style.transform = 'translateX(' + (dx * feel) + 'px)';
     }
 
     function end(e){
@@ -636,20 +615,9 @@ initSwipeNav({ goLeftHref: 'index.html', goRightHref: null, deadZoneCenterRatio:
       const dy = t.clientY - y0;
       const dt = Date.now() - t0;
 
-      const allowLeft  = !!goLeftHref;
-      const allowRight = !!goRightHref;
+      if(canceled || Math.abs(dy) > slop || dt > timeMax){ reset(true); return; }
 
-      if(canceled || Math.abs(dy) > slop || dt > timeMax){
-        reset(true);
-        return;
-      }
-
-      if(dx >= threshold && allowRight){
-        window.__swipeNavigating = true;
-        page.style.transition = 'transform 160ms ease';
-        page.style.transform  = 'translateX(100vw)';
-        setTimeout(()=>{ location.href = goRightHref; }, 150);
-      } else if(dx <= -threshold && allowLeft){
+      if(dx <= -threshold && goLeftHref){
         window.__swipeNavigating = true;
         page.style.transition = 'transform 160ms ease';
         page.style.transform  = 'translateX(-100vw)';
@@ -668,6 +636,6 @@ initSwipeNav({ goLeftHref: 'index.html', goRightHref: null, deadZoneCenterRatio:
     document.addEventListener('pointerup',   end,   { passive:true, capture:true });
   }
 
-  // list: 우→좌 = index (오른쪽 페이지 없음 → 오른쪽 끌림 완전 차단, 중앙 데드존 15%)
-  initDragSwipe({ goLeftHref: 'index.html', goRightHref: null, threshold:60, slop:45, timeMax:700, feel:1.0, deadZoneCenterRatio: 0.15 });
+  // 오른쪽 페이지 없음 → index로만 복귀
+  initDragSwipe({ goLeftHref: 'index.html', threshold:60, slop:45, timeMax:700, feel:1.0, deadZoneCenterRatio: 0.15 });
 })();
