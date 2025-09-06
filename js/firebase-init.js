@@ -19,7 +19,7 @@ const fallback = {
   projectId: "kidsani",
   storageBucket: "kidsani.appspot.com",
   messagingSenderId: "917416041435",
-  appId: "YOUR_APP_ID" // TODO: 콘솔의 웹 앱 appId로 교체(또는 window.__FIREBASE_CONFIG로 주입)
+  appId: "1:917416041435:web:018c4e60a16e81f6b565fe"
 };
 
 const firebaseConfig =
