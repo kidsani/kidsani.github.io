@@ -19,7 +19,7 @@ const fallback = {
   projectId: "kidsani",
   storageBucket: "kidsani.appspot.com",
   messagingSenderId: "917416041435",
-  appId: "1:917416041435:web:018c4e60a16e81f6b565fe"
+  appId: "1:917416041435:web:018c4e60a16e81f6b565fe",
   measurementId: "G-E336TJY0ZE"
 };
 
