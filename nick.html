@@ -1,0 +1,67 @@
+<!-- ---------- nick.html (v0.1.0) ---------- -->
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>닉네임 | KidsAni</title>
+  <meta name="color-scheme" content="dark light"/>
+  <style>
+    :root{
+      --bg:#000; --panel:#111; --text:#fafafa; --muted:#bdbdbd;
+      --accent:#34d399; --accent-strong:#10b981;
+      --danger:#ff6b6b;
+      --radius:16px; --pad:22px; --btn-h:56px; --maxw:640px;
+      --font-big:clamp(22px,5vw,28px); --font-mid:clamp(16px,3.5vw,18px); --font-small:clamp(13px,2.8vw,14px);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,"Noto Sans KR","Malgun Gothic",sans-serif;background:var(--bg);color:var(--text)}
+    .wrap{min-height:100%;display:grid;place-items:center;padding:24px 14px}
+    .card{width:100%;max-width:var(--maxw);background:linear-gradient(180deg,#121212,#0d0d0d);border:1px solid #1d1d1d;border-radius:var(--radius);padding:var(--pad);box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .brand{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+    .logo{width:44px;height:44px;border-radius:12px;background:radial-gradient(circle at 35% 35%,#fff 0 25%,#e2e2e2 26% 40%,#111 41% 100%);box-shadow:inset 0 0 18px rgba(255,255,255,.15),0 4px 10px rgba(0,0,0,.4)}
+    h1{font-size:var(--font-big);margin:0}
+    .sub{color:var(--muted);font-size:var(--font-small);margin:6px 0 16px}
+    .row{display:grid;gap:12px;margin:12px 0}
+    label{font-size:var(--font-small);color:#d0d0d0}
+    input{width:100%;padding:14px 16px;border-radius:12px;border:1px solid #262626;background:#0b0b0b;color:var(--text);font-size:var(--font-mid);outline:none}
+    input:focus{border-color:#34d399;box-shadow:0 0 0 3px rgba(16,185,129,.16)}
+    .btn{height:var(--btn-h);border:0;border-radius:14px;font-size:var(--font-mid);font-weight:700;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+    .btn-primary{background:linear-gradient(180deg,var(--accent),var(--accent-strong));color:#05130f;text-shadow:0 1px 0 rgba(255,255,255,.12)}
+    .btn-ghost{background:#101010;color:#eaeaea;border:1px solid #222}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .msg{margin-top:10px;padding:10px 12px;border-radius:12px;font-size:var(--font-small);display:none}
+    .msg.show{display:block}
+    .msg.ok{background:#072f16;color:#b7ffcf;border:1px solid #0e5830}
+    .msg.err{background:#2a0e10;color:#ffc9c9;border:1px solid #5d1f25}
+    .current{padding:10px 12px;background:#0a0a0a;border:1px solid #1f1f1f;border-radius:12px;color:#ddd;font-size:var(--font-small)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <main class="card" role="main" aria-labelledby="title">
+      <div class="brand" aria-hidden="true">
+        <div class="logo" role="img" aria-label="KidsAni 로고"></div>
+        <h1 id="title">닉네임을 정해요</h1>
+      </div>
+      <p class="sub">닉네임은 <strong>영상 등록 시 표시</strong>돼요. 한글/영문/숫자/밑줄, 2~16자로 만들어 주세요.</p>
+
+      <div id="currentBox" class="current" style="display:none"></div>
+
+      <div class="row">
+        <label for="nick">닉네임</label>
+        <input id="nick" maxlength="16" placeholder="예: 토끼친구_01" autocomplete="off"/>
+        <div id="msg" class="msg" role="status" aria-live="polite"></div>
+      </div>
+
+      <div class="grid2">
+        <button id="btnSave" class="btn btn-primary" type="button">확인</button>
+        <button id="btnHome" class="btn btn-ghost" type="button">처음 화면</button>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="./js/nick.js?v=0.1.0"></script>
+</body>
+</html>
+<!-- ---------- end of nick.html ---------- -->
