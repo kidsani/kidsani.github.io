@@ -5,212 +5,51 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>로그인 | KidsAni</title>
-  <meta name="color-scheme" content="dark" />
+  <meta name="color-scheme" content="dark light" />
   <style>
     :root{
-      --bg:#000;
-      --panel:#111;
-      --text:#fafafa;
-      --muted:#bdbdbd;
-      --accent:#7dd3fc; /* 하늘색 */
-      --accent-strong:#38bdf8;
-      --danger:#ff6b6b;
-      --ok:#22c55e;
-      --maxw-m: 460px;   /* 휴대폰 중심 */
-      --maxw-t: 680px;   /* 태블릿 */
-      --radius: 16px;
-      --pad: 18px;
-      --pad-lg: 24px;
-      --gap: 14px;
-      --font-big: clamp(22px, 4.5vw, 28px);
+      --bg:#000; --panel:#111; --text:#fafafa; --muted:#bdbdbd;
+      --accent:#7dd3fc; --accent-strong:#38bdf8;
+      --radius:16px; --pad:22px; --gap:14px;
+      --font-big: clamp(22px, 5vw, 28px);
       --font-mid: clamp(16px, 3.5vw, 18px);
       --font-small: clamp(13px, 2.8vw, 14px);
-      --btn-height: 54px;
+      --btn-h: 56px; --maxw: 560px;
     }
-    *{ box-sizing:border-box; }
-    html,body{ height:100%; background:var(--bg); color:var(--text); margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", Apple SD Gothic Neo, "Malgun Gothic", sans-serif; }
-    a{ color:var(--accent-strong); text-decoration:none; }
-    a:hover{ text-decoration:underline; }
-
-    .wrap{
-      min-height:100%;
-      display:grid;
-      place-items:center;
-      padding: 24px 14px;
-    }
-    .card{
-      width:100%;
-      max-width: var(--maxw-m);
-      background: linear-gradient(180deg, #121212, #0d0d0d);
-      border: 1px solid #1d1d1d;
-      border-radius: var(--radius);
-      padding: var(--pad-lg);
-      box-shadow: 0 10px 30px rgba(0,0,0,.35);
-    }
-    @media (min-width: 640px){
-      .card{ max-width: var(--maxw-t); }
-    }
-
-    .brand{
-      display:flex; align-items:center; gap:12px; margin-bottom: 14px;
-    }
-    .brand .logo{
-      width:42px; height:42px; border-radius:12px;
-      background: radial-gradient(circle at 35% 35%, #fff 0 25%, #e2e2e2 26% 40%, #111 41% 100%);
-      /* 임시 로고: 동글동글한 젤리 느낌 */
-      box-shadow: inset 0 0 18px rgba(255,255,255,.15), 0 4px 10px rgba(0,0,0,.4);
-    }
-    .brand h1{
-      font-size: var(--font-big);
-      margin:0; letter-spacing:.3px;
-    }
-    .sub{
-      color:var(--muted);
-      font-size: var(--font-small);
-      margin: 2px 0 14px;
-    }
-
-    .field{
-      display:grid; gap:8px; margin: 12px 0;
-    }
-    label{ font-size: var(--font-small); color:#d0d0d0; }
-    input{
-      background:#0b0b0b; color:var(--text);
-      border:1px solid #262626; border-radius: 12px;
-      padding: 14px 16px; font-size: var(--font-mid);
-      outline:none;
-    }
-    input:focus{ border-color: var(--accent); box-shadow: 0 0 0 3px rgba(56,189,248,.15); }
-
-    .btn{
-      width:100%;
-      height: var(--btn-height);
-      border:0; border-radius: 14px;
-      font-size: var(--font-mid);
-      font-weight:700; letter-spacing:.2px;
-      display:inline-flex; align-items:center; justify-content:center;
-      cursor:pointer;
-      transition: transform .02s ease, filter .2s ease;
-    }
-    .btn:active{ transform: translateY(1px); }
-    .btn-primary{
-      background: linear-gradient(180deg, var(--accent), var(--accent-strong));
-      color:#05131a; text-shadow: 0 1px 0 rgba(255,255,255,.15);
-    }
-    .btn-ghost{
-      background:#101010; color:#eaeaea; border:1px solid #222;
-    }
-    .row{ display:grid; gap: 10px; margin-top: 12px; }
-    .help{ text-align:center; color:var(--muted); font-size: var(--font-small); margin-top:12px; }
-
-    .msg{
-      margin-top: 10px;
-      padding: 10px 12px;
-      border-radius: 12px;
-      font-size: var(--font-small);
-      display:none;
-    }
-    .msg.show{ display:block; }
-    .msg.ok{ background:#072f16; color:#b7ffcf; border:1px solid #0e5830; }
-    .msg.err{ background:#2a0e10; color:#ffc9c9; border:1px solid #5d1f25; }
-
-    .safe-note{
-      margin-top: 14px;
-      font-size: var(--font-small);
-      color:#d1f5ff;
-      background:#07171e;
-      border:1px solid #0e3340;
-      padding: 10px 12px;
-      border-radius: 12px;
-    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,"Noto Sans KR","Malgun Gothic",sans-serif;background:var(--bg);color:var(--text)}
+    .wrap{min-height:100%;display:grid;place-items:center;padding:24px 14px}
+    .card{width:100%;max-width:var(--maxw);background:linear-gradient(180deg,#121212,#0d0d0d);border:1px solid #1d1d1d;border-radius:var(--radius);padding:var(--pad);box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .brand{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+    .logo{width:44px;height:44px;border-radius:12px;background:radial-gradient(circle at 35% 35%,#fff 0 25%,#e2e2e2 26% 40%,#111 41% 100%);box-shadow:inset 0 0 18px rgba(255,255,255,.15),0 4px 10px rgba(0,0,0,.4)}
+    h1{font-size:var(--font-big);margin:0}
+    .sub{color:var(--muted);font-size:var(--font-small);margin:6px 0 16px}
+    .btn{width:100%;height:var(--btn-h);border:0;border-radius:14px;font-size:var(--font-mid);font-weight:700;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+    .btn-google{background:linear-gradient(180deg,var(--accent),var(--accent-strong));color:#05131a;text-shadow:0 1px 0 rgba(255,255,255,.15)}
+    .msg{margin-top:10px;padding:10px 12px;border-radius:12px;font-size:var(--font-small);display:none}
+    .msg.show{display:block}
+    .msg.ok{background:#072f16;color:#b7ffcf;border:1px solid #0e5830}
+    .msg.err{background:#2a0e10;color:#ffc9c9;border:1px solid #5d1f25}
+    .help{margin-top:12px;color:var(--muted);text-align:center;font-size:var(--font-small)}
   </style>
 </head>
 <body>
   <div class="wrap">
     <main class="card" role="main" aria-labelledby="title">
       <div class="brand" aria-hidden="true">
-        <div class="logo" role="img" aria-label="KidsAni 로고 (젤리 발바닥 느낌)"></div>
-        <h1 id="title">안녕하세요! 로그인하고 시작해요</h1>
+        <div class="logo" role="img" aria-label="KidsAni 로고"></div>
+        <h1 id="title">구글로 로그인하고 시작해요</h1>
       </div>
-      <p class="sub">아이들 스스로도 쉽게! 큼직한 버튼과 쉬운 문장으로 도와드릴게요 😊</p>
+      <p class="sub">아이들도 쉽게 쓸 수 있도록 큰 버튼과 간단한 문장으로 안내해 드려요 😊</p>
 
-      <form id="formSignIn" autocomplete="on" novalidate>
-        <div class="field">
-          <label for="email">이메일</label>
-          <input id="email" name="email" type="email" inputmode="email" placeholder="you@example.com" required aria-required="true" />
-        </div>
-        <div class="field">
-          <label for="pw">비밀번호</label>
-          <input id="pw" name="pw" type="password" placeholder="●●●●●●●●" required aria-required="true" minlength="6" />
-        </div>
-        <div class="row">
-          <button class="btn btn-primary" type="submit" id="btnEmail">로그인하기</button>
-          <button class="btn btn-ghost" type="button" id="btnGoogle" aria-label="구글로 로그인">Google로 로그인</button>
-        </div>
-        <div id="msg" class="msg" role="status" aria-live="polite"></div>
-      </form>
+      <button id="btnGoogle" class="btn btn-google" type="button" aria-label="구글로 로그인">Google로 로그인</button>
+      <div id="msg" class="msg" role="status" aria-live="polite"></div>
 
-      <p class="help">처음 오셨나요? <a href="signup.html">회원가입하기</a></p>
-
-      <div class="safe-note">
-        <strong>안전 약속:</strong> 낯선 사람과 계정 정보를 나누지 않아요. 도움이 필요하면 보호자/선생님께 꼭 물어보기!
-      </div>
+      <p class="help">처음이신가요? <a href="signup.html">회원가입 안내 보기</a></p>
     </main>
   </div>
 
-  <script type="module">
-    /* 모듈 로드 */
-    import { auth } from './js/firebase-init.js';
-    import {
-      signInWithEmailAndPassword,
-      GoogleAuthProvider,
-      signInWithPopup
-    } from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js';
-
-    const $ = sel => document.querySelector(sel);
-    const form = $('#formSignIn');
-    const msg  = $('#msg');
-    const btnGoogle = $('#btnGoogle');
-
-    function showMsg(text, ok=false){
-      msg.textContent = text;
-      msg.className = 'msg show ' + (ok ? 'ok':'err');
-    }
-
-    form.addEventListener('submit', async (e)=>{
-      e.preventDefault();
-      const email = $('#email').value.trim();
-      const pw    = $('#pw').value;
-      if(!email || !pw){ return showMsg('이메일과 비밀번호를 입력해 주세요.'); }
-      try{
-        await signInWithEmailAndPassword(auth, email, pw);
-        showMsg('로그인 성공! 잠시만요…', true);
-        setTimeout(()=> location.href = 'index.html', 300);
-      }catch(err){
-        const code = err?.code || '';
-        const map = {
-          'auth/invalid-email':'이메일 주소를 확인해 주세요.',
-          'auth/user-disabled':'해당 계정은 사용이 중지되었어요.',
-          'auth/user-not-found':'계정을 찾을 수 없어요. 회원가입을 먼저 해 주세요.',
-          'auth/wrong-password':'비밀번호가 맞지 않아요.',
-          'auth/too-many-requests':'잠시 후 다시 시도해 주세요.'
-        };
-        showMsg(map[code] || `로그인에 실패했어요 (${code || '알 수 없는 오류'})`);
-      }
-    });
-
-    btnGoogle.addEventListener('click', async ()=>{
-      try{
-        const provider = new GoogleAuthProvider();
-        await signInWithPopup(auth, provider);
-        showMsg('구글 로그인 성공! 이동합니다…', true);
-        setTimeout(()=> location.href = 'index.html', 300);
-      }catch(err){
-        showMsg('구글 로그인에 실패했어요. 잠시 후 다시 시도해 주세요.');
-        console.error(err);
-      }
-    });
-  </script>
+  <script type="module" src="./js/signin.js?v=0.1.0"></script>
 </body>
 </html>
-<!-- ---------- end of signin.html (v0.1.0) ---------- -->
+<!-- ---------- end of signin.html ---------- -->
