@@ -141,7 +141,7 @@ function renderGroups(){
          </legend>`;
 
     const noteHTML = isPersonalGroup
-      ? `<div class="muted" style="margin:6px 4px 2px;">개인자료는 <b>단독 재생만</b> 가능합니다.</div>`
+      ? `<div class="muted" style="margin:6px 4px 2px;">시리즈와 개인자료는 <b>단독 재생만</b> 가능합니다.</div>`
       : '';
 
     // 플래그 속성: true일 때만 추가
