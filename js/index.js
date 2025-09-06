@@ -1,7 +1,8 @@
-// js/index.js (v1.9.3-kidsani-full)
-// - categories.js를 정식 import (쿼리스트링 없음: ./categories.js)
-// - 드롭다운/상단바/카테고리 렌더/시리즈 토글/전체선택 제외/개인 단독/스와이프(단순형+고급형)/슬라이드CSS 전부 포함
-// - storage 변경(personalLabels, groupOrderV1, seriesGroupKeys) 핫리로드 반영
+// js/index.js (v1.9.4-kidsani-stable)
+// - categories.js를 정식 import
+// - 드롭다운/상단바/카테고리 렌더/시리즈 토글/전체선택 제외/개인 단독
+// - 스와이프(단순형+드래그팔로우) + 슬라이드 CSS
+// - 보수적 옵션 초기화(구조분해 디폴트 제거)
 
 import { CATEGORY_GROUPS, isSeriesGroupKey, getSeriesOrderDefault } from './categories.js';
 import { auth } from './firebase-init.js?v=1.5.1';
@@ -14,7 +15,6 @@ const GROUP_ORDER_KEY   = 'groupOrderV1';
 const ORDER_PREF_PREFIX = 'orderMode:'; // 'orderMode:<groupKey>' = 'created' | 'latest'
 const isPersonalVal = (v)=> v==='personal_1' || v==='personal_2' || v==='personal1' || v==='personal2';
 
-// 시리즈 정렬 모드
 function getOrderMode(groupKey){
   if(!isSeriesGroupKey(groupKey)) return 'created';
   const saved = localStorage.getItem(ORDER_PREF_PREFIX + groupKey);
@@ -27,7 +27,6 @@ function toggleOrderMode(groupKey){
   if(btn) btn.textContent = (next==='created') ? '등록순' : '최신순';
 }
 
-// 전역 내비 중복 방지
 window.__swipeNavigating = window.__swipeNavigating || false;
 
 /* ========== 그룹 순서 ========== */
@@ -119,13 +118,11 @@ function renderGroups(){
     const isPersonalGroup = g.key==='personal';
     const isSeries        = isSeriesGroupKey(g.key);
 
-    // children
     const kids = g.children.map(c=>{
       const labelText = (isPersonalGroup && personalLabels[c.value]) ? personalLabels[c.value] : c.label;
       return `<label><input type="checkbox" class="cat" value="${c.value}"> ${labelText}</label>`;
     }).join('');
 
-    // legend: [체크박스][제목][(시리즈면)정렬토글]
     const baseToggle = isPersonalGroup
       ? `<span style="font-weight:800;">${g.label}</span> <span class="muted">(로컬저장소)</span>`
       : `<label class="group-toggle">
@@ -161,7 +158,6 @@ function renderGroups(){
   catsBox.innerHTML = html;
   bindGroupInteractions();
 
-  // 시리즈 정렬 토글 핸들러
   catsBox.querySelectorAll('.order-toggle').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const gk = btn.getAttribute('data-group');
@@ -174,7 +170,7 @@ renderGroups();
 /* ========== parent/child sync ========== */
 function setParentStateByChildren(groupEl){
   const parent = groupEl.querySelector('.group-check');
-  if(!parent) return; // personal: no parent
+  if(!parent) return;
   const children = Array.from(groupEl.querySelectorAll('input.cat'));
   const total = children.length;
   const checked = children.filter(c=>c.checked).length;
@@ -189,14 +185,12 @@ function refreshAllParentStates(){
   catsBox.querySelectorAll('.group').forEach(setParentStateByChildren);
 }
 function computeAllSelected(){
-  // 전체선택: 시리즈/개인 제외
   const real = Array.from(catsBox.querySelectorAll('.group[data-series="0"]:not([data-key="personal"]) input.cat'));
   return real.length>0 && real.every(c=>c.checked);
 }
 let allSelected=false;
 
 function bindGroupInteractions(){
-  // 그룹 체크
   catsBox.querySelectorAll('.group-check').forEach(parent=>{
     parent.addEventListener('change', ()=>{
       const groupEl = parent.closest('.group');
@@ -204,19 +198,16 @@ function bindGroupInteractions(){
       setParentStateByChildren(groupEl);
       allSelected = computeAllSelected();
       if (cbToggleAll) cbToggleAll.checked = allSelected;
-      // 일반 선택 시 personal 해제
       catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked').forEach(c=> c.checked=false);
     });
   });
 
-  // 자식 체크
   catsBox.querySelectorAll('input.cat').forEach(child=>{
     child.addEventListener('change', ()=>{
       const v = child.value;
       const isPersonal = isPersonalVal(v);
 
       if (isPersonal && child.checked){
-        // 개인 = 단독
         catsBox.querySelectorAll('.group[data-key="personal"] input.cat').forEach(c=>{ if(c!==child) c.checked=false; });
         catsBox.querySelectorAll('.group:not([data-key="personal"]) input.cat:checked').forEach(c=> c.checked=false);
       }
@@ -236,12 +227,10 @@ function bindGroupInteractions(){
 
 /* ========== 전체선택 & 상태 복구 ========== */
 function selectAll(on){
-  // 일반 카테고리만 대상
   catsBox
     .querySelectorAll('.group[data-series="0"]:not([data-key="personal"]) input.cat')
     .forEach(b => { b.checked = !!on; });
 
-  // 항상 해제: personal & series
   catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked, .group[data-series="1"] input.cat:checked')
     .forEach(c => { c.checked = false; });
 
@@ -258,7 +247,6 @@ function applySavedSelection(){
     const set = new Set(saved);
     catsBox.querySelectorAll('.cat').forEach(ch=>{ if (set.has(ch.value)) ch.checked=true; });
 
-    // personal 단독 보정
     const personals = Array.from(catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked'));
     const normals   = Array.from(catsBox.querySelectorAll('.group:not([data-key="personal"]) input.cat:checked'));
     if (personals.length >= 1 && normals.length >= 1){
@@ -268,12 +256,10 @@ function applySavedSelection(){
     }
     refreshAllParentStates();
   }
-  // autonext 초기 반영
   const vv = (localStorage.getItem('autonext') || '').toLowerCase();
   if (cbAutoNext) cbAutoNext.checked = (vv==='1' || vv==='true' || vv==='on');
 }
 applySavedSelection();
-
 cbToggleAll?.addEventListener('change', ()=> selectAll(!!cbToggleAll.checked));
 
 /* ========== watch 이동 & list 직전 저장 ========== */
@@ -292,14 +278,12 @@ function persistSelectedCatsForList(){
 }
 
 btnWatch?.addEventListener('click', ()=>{
-  // index→watch: 항상 최신 큐로
   sessionStorage.removeItem('playQueue'); sessionStorage.removeItem('playIndex');
 
   const selected = Array.from(document.querySelectorAll('.cat:checked')).map(c=>c.value);
   const personals = selected.filter(isPersonalVal);
   const normals   = selected.filter(v=> !isPersonalVal(v));
 
-  // 개인자료 단독
   if (personals.length === 1 && normals.length === 0){
     localStorage.setItem('selectedCats', JSON.stringify(personals));
     localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
@@ -307,16 +291,14 @@ btnWatch?.addEventListener('click', ()=>{
     return;
   }
 
-  // 일반
   const isAll = computeAllSelected();
   const valueToSave = (normals.length===0 || isAll) ? "ALL" : normals;
   localStorage.setItem('selectedCats', JSON.stringify(valueToSave));
   localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
 
-  // 시리즈별 정렬 모드 힌트 저장 (watch/list에서 활용 가능)
   const seriesOrderHints = {};
   applyGroupOrder(CATEGORY_GROUPS).forEach(g=>{
-    if(isSeriesGroupKey(g.key)) seriesOrderHints[g.key] = getOrderMode(g.key); // 'created' | 'latest'
+    if(isSeriesGroupKey(g.key)) seriesOrderHints[g.key] = getOrderMode(g.key);
   });
   sessionStorage.setItem('seriesOrderHints', JSON.stringify(seriesOrderHints));
 
@@ -353,9 +335,15 @@ window.addEventListener('storage', (e)=>{
 })();
 
 /* ===================== */
-/* 단순형 스와이프 */
+/* 단순형 스와이프 (보수적 옵션 초기화) */
 /* ===================== */
-function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZoneCenterRatio=0.30 } = {}){
+function initSwipeNav(opts){
+  opts = opts || {};
+  const goLeftHref = ('goLeftHref' in opts) ? opts.goLeftHref : null;
+  const goRightHref = ('goRightHref' in opts) ? opts.goRightHref : null;
+  const animateMs = ('animateMs' in opts) ? opts.animateMs : 260;
+  const deadZoneCenterRatio = ('deadZoneCenterRatio' in opts) ? opts.deadZoneCenterRatio : 0.30;
+
   let sx=0, sy=0, t0=0, tracking=false;
   const THRESH_X = 70, MAX_OFF_Y = 80, MAX_TIME  = 600;
   const getPoint=(e)=> e.touches?.[0] || e.changedTouches?.[0] || e;
@@ -390,10 +378,19 @@ function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZo
 initSwipeNav({ goLeftHref:'upload.html', goRightHref:'list.html', deadZoneCenterRatio:0.30 });
 
 /* ===================== */
-/* 고급형 스와이프(드래그 팔로우) */
+/* 고급형 스와이프(드래그 팔로우, 보수적 옵션 초기화) */
 /* ===================== */
 (function(){
-  function initDragSwipe({ goLeftHref=null, goRightHref=null, threshold=60, slop=45, timeMax=700, feel=1.0, deadZoneCenterRatio=0.15 }={}){
+  function initDragSwipe(opts){
+    opts = opts || {};
+    const goLeftHref = ('goLeftHref' in opts) ? opts.goLeftHref : null;
+    const goRightHref = ('goRightHref' in opts) ? opts.goRightHref : null;
+    const threshold = ('threshold' in opts) ? opts.threshold : 60;
+    const slop = ('slop' in opts) ? opts.slop : 45;
+    const timeMax = ('timeMax' in opts) ? opts.timeMax : 700;
+    const feel = ('feel' in opts) ? opts.feel : 1.0;
+    const deadZoneCenterRatio = ('deadZoneCenterRatio' in opts) ? opts.deadZoneCenterRatio : 0.15;
+
     const page=document.querySelector('main')||document.body; if(!page) return;
     if(!page.style.willChange || !page.style.willChange.includes('transform')){
       page.style.willChange = (page.style.willChange ? page.style.willChange + ', transform' : 'transform');
@@ -447,5 +444,5 @@ initSwipeNav({ goLeftHref:'upload.html', goRightHref:'list.html', deadZoneCenter
     document.addEventListener('pointermove', move,  { passive:false });
     document.addEventListener('pointerup',   end,   { passive:true, capture:true });
   }
-  initDragSwipe({ goLeftHref:'upload.html', goRightHref:'list.html', threshold:60, slop:45, timeMax:700, feel=1.0, deadZoneCenterRatio:0.15 });
+  initDragSwipe({ goLeftHref:'upload.html', goRightHref:'list.html', threshold:60, slop:45, timeMax:700, feel:1.0, deadZoneCenterRatio:0.15 });
 })();
