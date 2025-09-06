@@ -1,60 +1,68 @@
-// js/index.js (kidsani hotfix)
+// js/index.js (v1.9.1-kidsani-complete)
 // - categories.js?v=1.5.1 로딩 실패 시 ./categories.js로 재시도
-// - 실패해도 UI 나머지는 동작(에러 안내 표시)
-// - 시리즈 토글/전체선택 제외/개인 단독 포함 (원본 기능 유지)
+// - 드롭다운/상단바/카테고리/시리즈토글/전체선택/개인단독/스와이프 전체 포함
 
 import { auth } from './firebase-init.js?v=1.5.1';
 import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=1.5.1';
 
-// ---------- 안전한 categories 모듈 로딩 ----------
+/* ===================== */
+/* 안전한 categories 로딩 */
+/* ===================== */
 let CATEGORY_GROUPS = [];
+let _isSeriesGroupKey = null;
+let _getSeriesOrderDefault = null;
+
 async function loadCategories(){
   try {
     const m = await import('./categories.js?v=1.5.1');
     CATEGORY_GROUPS = m.CATEGORY_GROUPS || [];
-    // 시리즈 헬퍼가 있으면 그대로 사용, 없으면 폴백
-    isSeriesGroupKey = m.isSeriesGroupKey || isSeriesGroupKey;
-    getSeriesOrderDefault = m.getSeriesOrderDefault || getSeriesOrderDefault;
+    _isSeriesGroupKey = m.isSeriesGroupKey || null;
+    _getSeriesOrderDefault = m.getSeriesOrderDefault || null;
   } catch (e1) {
-    console.warn('[KidsAni] fallback categories import', e1);
+    console.warn('[KidsAni] categories.js?v=1.5.1 import 실패, fallback 시도', e1);
     try {
       const m2 = await import('./categories.js');
       CATEGORY_GROUPS = m2.CATEGORY_GROUPS || [];
-      isSeriesGroupKey = m2.isSeriesGroupKey || isSeriesGroupKey;
-      getSeriesOrderDefault = m2.getSeriesOrderDefault || getSeriesOrderDefault;
+      _isSeriesGroupKey = m2.isSeriesGroupKey || null;
+      _getSeriesOrderDefault = m2.getSeriesOrderDefault || null;
     } catch (e2) {
-      console.error('[KidsAni] categories import failed twice', e2);
+      console.error('[KidsAni] categories import 실패', e2);
       CATEGORY_GROUPS = [];
     }
   }
 }
 
-// ---------- 공통 상수/도우미 ----------
+/* ===================== */
+/* 공통 상수/도우미 */
+/* ===================== */
 const GROUP_ORDER_KEY   = 'groupOrderV1';
 const ORDER_PREF_PREFIX = 'orderMode:'; // 'orderMode:<groupKey>' = 'created' | 'latest'
 const isPersonalVal = (v)=> v==='personal_1' || v==='personal_2' || v==='personal1' || v==='personal2';
 
-// 시리즈 판별(폴백): key가 series_로 시작하거나 localStorage 등록 목록에 있으면 시리즈
-function getSeriesKeySet(){
+// fallback 시리즈 판별: key 접두사 'series_' 또는 localStorage('seriesGroupKeys')
+function _getSeriesKeySet(){
   try{
     const raw = localStorage.getItem('seriesGroupKeys');
     const arr = JSON.parse(raw || '[]');
     return new Set(Array.isArray(arr)?arr:[]);
   }catch{ return new Set(); }
 }
-function isSeriesGroupKey(k){
-  const set = getSeriesKeySet();
-  return typeof k === 'string' && (k.startsWith('series_') || set.has(k));
+function isSeriesGroupKey(key){
+  if (typeof _isSeriesGroupKey === 'function') return _isSeriesGroupKey(key);
+  const set = _getSeriesKeySet();
+  return typeof key === 'string' && (key.startsWith('series_') || set.has(key));
 }
-function getSeriesOrderDefault(){ return 'created'; }
+function getSeriesOrderDefault(key){
+  if (typeof _getSeriesOrderDefault === 'function') return _getSeriesOrderDefault(key);
+  return 'created';
+}
 function getOrderMode(groupKey){
   if(!isSeriesGroupKey(groupKey)) return 'created';
-  const saved = localStorage.getItem(ORDER_PREF_PREFIX + groupKey);
-  return (saved==='latest' || saved==='created') ? saved : getSeriesOrderDefault(groupKey);
+  const v = localStorage.getItem(ORDER_PREF_PREFIX + groupKey);
+  return (v==='latest' || v==='created') ? v : getSeriesOrderDefault(groupKey);
 }
 function toggleOrderMode(groupKey){
-  const cur = getOrderMode(groupKey);
-  const next = (cur==='created') ? 'latest' : 'created';
+  const next = (getOrderMode(groupKey)==='created') ? 'latest' : 'created';
   localStorage.setItem(ORDER_PREF_PREFIX + groupKey, next);
   const btn = document.querySelector(`.order-toggle[data-group="${groupKey}"]`);
   if(btn) btn.textContent = (next==='created') ? '등록순' : '최신순';
@@ -63,7 +71,7 @@ function toggleOrderMode(groupKey){
 // 전역 내비 중복 방지
 window.__swipeNavigating = window.__swipeNavigating || false;
 
-/* ---------- group order ---------- */
+/* ========== 그룹 순서 ========== */
 function applyGroupOrder(groups){
   let saved = null;
   try{ saved = JSON.parse(localStorage.getItem(GROUP_ORDER_KEY) || 'null'); }catch{}
@@ -72,13 +80,13 @@ function applyGroupOrder(groups){
   return groups.slice().sort((a,b)=>(idx.get(a.key)??999) - (idx.get(b.key)??999));
 }
 
-/* ---------- personal labels (local) ---------- */
+/* ========== 개인 라벨 로컬 저장 ========== */
 function getPersonalLabels(){
   try { return JSON.parse(localStorage.getItem('personalLabels') || '{}'); }
   catch { return {}; }
 }
 
-/* ---------- topbar ---------- */
+/* ========== Topbar / 드롭다운 ========== */
 const signupLink   = document.getElementById("signupLink");
 const signinLink   = document.getElementById("signinLink");
 const welcome      = document.getElementById("welcome");
@@ -115,7 +123,7 @@ btnSignOut   ?.addEventListener("click", async ()=>{ if(!auth.currentUser){ loca
 btnList      ?.addEventListener("click", ()=>{ location.href = "list.html"; closeDropdown(); });
 brandHome    ?.addEventListener("click",(e)=>{ e.preventDefault(); window.scrollTo({top:0,behavior:"smooth"}); });
 
-/* === 연속재생(autonext) === */
+/* ========== 연속재생(autonext) ========== */
 (function setupAutoNext(){
   const KEY='autonext', $auto=document.getElementById('cbAutoNext');
   if(!$auto) return;
@@ -126,7 +134,7 @@ brandHome    ?.addEventListener("click",(e)=>{ e.preventDefault(); window.scroll
   window.addEventListener('storage', (e)=>{ if(e.key===KEY) $auto.checked = read(); });
 })();
 
-/* ---------- cats ---------- */
+/* ========== 카테고리 렌더링 ========== */
 const catsBox      = document.getElementById("cats");
 const btnWatch     = document.getElementById("btnWatch");
 const cbAutoNext   = document.getElementById("cbAutoNext");
@@ -136,7 +144,7 @@ const catTitleBtn  = document.getElementById("btnOpenOrder");
 function safeGroups(){
   if (!Array.isArray(CATEGORY_GROUPS) || CATEGORY_GROUPS.length===0){
     console.error('[KidsAni] CATEGORY_GROUPS empty.');
-    catsBox && (catsBox.innerHTML = `<div class="muted" style="padding:8px;">카테고리를 불러오지 못했습니다. <code>js/categories.js?v=1.5.1</code> 경로/배포를 확인하세요.</div>`);
+    catsBox && (catsBox.innerHTML = `<div class="muted" style="padding:8px;">카테고리를 불러오지 못했습니다. <code>js/categories.js</code> 배포/경로를 확인하세요.</div>`);
     return [];
   }
   return CATEGORY_GROUPS;
@@ -150,7 +158,7 @@ function renderGroups(){
 
   const html = groups.map(g=>{
     const isPersonalGroup = g.key==='personal';
-    const isSeriesGroup   = isSeriesGroupKey(g.key);
+    const series          = isSeriesGroupKey(g.key);
 
     const kids = g.children.map(c=>{
       const labelText = (isPersonalGroup && personalLabels[c.value]) ? personalLabels[c.value] : c.label;
@@ -164,7 +172,7 @@ function renderGroups(){
            <span>${g.label}</span>
          </label>`;
 
-    const orderBtn = (!isPersonalGroup && isSeriesGroup)
+    const orderBtn = (!isPersonalGroup && series)
       ? `<button type="button" class="group-toggle order-toggle" data-group="${g.key}" aria-label="정렬 전환">
            ${getOrderMode(g.key)==='created' ? '등록순' : '최신순'}
          </button>`
@@ -178,7 +186,7 @@ function renderGroups(){
       ? `<div class="muted" style="margin:6px 4px 2px;">개인자료는 <b>단독 재생만</b> 가능합니다.</div>`
       : '';
 
-    const seriesAttr = isSeriesGroup ? ' data-series="1"' : ' data-series="0"';
+    const seriesAttr = series ? ' data-series="1"' : ' data-series="0"';
 
     return `
       <fieldset class="group" data-key="${g.key}"${seriesAttr}>
@@ -191,9 +199,16 @@ function renderGroups(){
 
   catsBox.innerHTML = html;
   bindGroupInteractions();
+  // 시리즈 정렬 토글 핸들러
+  catsBox.querySelectorAll('.order-toggle').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const gk = btn.getAttribute('data-group');
+      toggleOrderMode(gk);
+    });
+  });
 }
 
-/* ---------- parent/child sync ---------- */
+/* ========== parent/child sync ========== */
 function setParentStateByChildren(groupEl){
   const parent = groupEl.querySelector('.group-check');
   if(!parent) return;
@@ -211,6 +226,7 @@ function refreshAllParentStates(){
   catsBox.querySelectorAll('.group').forEach(setParentStateByChildren);
 }
 function computeAllSelected(){
+  // 전체선택: series/personal 제외
   const real = Array.from(catsBox.querySelectorAll('.group[data-series="0"]:not([data-key="personal"]) input.cat'));
   return real.length>0 && real.every(c=>c.checked);
 }
@@ -225,13 +241,6 @@ function bindGroupInteractions(){
       allSelected = computeAllSelected();
       if (cbToggleAll) cbToggleAll.checked = allSelected;
       catsBox.querySelectorAll('.group[data-key="personal"] input.cat:checked').forEach(c=> c.checked=false);
-    });
-  });
-
-  catsBox.querySelectorAll('.order-toggle').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const gk = btn.getAttribute('data-group');
-      toggleOrderMode(gk);
     });
   });
 
@@ -258,7 +267,7 @@ function bindGroupInteractions(){
   });
 }
 
-/* ---------- select all & load saved ---------- */
+/* ========== 전체선택 & 상태 복구 ========== */
 function selectAll(on){
   catsBox
     .querySelectorAll('.group[data-series="0"]:not([data-key="personal"]) input.cat')
@@ -291,8 +300,9 @@ function applySavedSelection(){
   const vv = (localStorage.getItem('autonext') || '').toLowerCase();
   if (cbAutoNext) cbAutoNext.checked = (vv==='1' || vv==='true' || vv==='on');
 }
+cbToggleAll?.addEventListener('change', ()=> selectAll(!!cbToggleAll.checked));
 
-/* ---------- go watch ---------- */
+/* ========== watch 이동 & list 직전 저장 ========== */
 function persistSelectedCatsForList(){
   const selected = Array.from(document.querySelectorAll('.cat:checked')).map(c=>c.value);
   const personals = selected.filter(isPersonalVal);
@@ -307,46 +317,69 @@ function persistSelectedCatsForList(){
   localStorage.setItem('selectedCats', JSON.stringify(valueToSave));
 }
 
-function wireCTA(){
-  const btnWatch = document.getElementById('btnWatch');
-  btnWatch?.addEventListener('click', ()=>{
-    sessionStorage.removeItem('playQueue'); sessionStorage.removeItem('playIndex');
+btnWatch?.addEventListener('click', ()=>{
+  sessionStorage.removeItem('playQueue'); sessionStorage.removeItem('playIndex');
 
-    const selected = Array.from(document.querySelectorAll('.cat:checked')).map(c=>c.value);
-    const personals = selected.filter(isPersonalVal);
-    const normals   = selected.filter(v=> !isPersonalVal(v));
+  const selected = Array.from(document.querySelectorAll('.cat:checked')).map(c=>c.value);
+  const personals = selected.filter(isPersonalVal);
+  const normals   = selected.filter(v=> !isPersonalVal(v));
 
-    if (personals.length === 1 && normals.length === 0){
-      localStorage.setItem('selectedCats', JSON.stringify(personals));
-      localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
-      location.href = `watch.html?cats=${encodeURIComponent(personals[0])}`;
-      return;
-    }
-
-    const isAll = computeAllSelected();
-    const valueToSave = (normals.length===0 || isAll) ? "ALL" : normals;
-    localStorage.setItem('selectedCats', JSON.stringify(valueToSave));
+  if (personals.length === 1 && normals.length === 0){
+    localStorage.setItem('selectedCats', JSON.stringify(personals));
     localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
+    location.href = `watch.html?cats=${encodeURIComponent(personals[0])}`;
+    return;
+  }
 
-    const seriesOrderHints = {};
-    applyGroupOrder(CATEGORY_GROUPS).forEach(g=>{
-      if(isSeriesGroupKey(g.key)) seriesOrderHints[g.key] = getOrderMode(g.key);
-    });
-    sessionStorage.setItem('seriesOrderHints', JSON.stringify(seriesOrderHints));
+  const isAll = computeAllSelected();
+  const valueToSave = (normals.length===0 || isAll) ? "ALL" : normals;
+  localStorage.setItem('selectedCats', JSON.stringify(valueToSave));
+  localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
 
-    location.href = 'watch.html';
+  const seriesOrderHints = {};
+  applyGroupOrder(CATEGORY_GROUPS).forEach(g=>{
+    if(isSeriesGroupKey(g.key)) seriesOrderHints[g.key] = getOrderMode(g.key);
   });
+  sessionStorage.setItem('seriesOrderHints', JSON.stringify(seriesOrderHints));
 
-  document.getElementById('cbToggleAll')?.addEventListener('change', (e)=> selectAll(!!e.target.checked));
-  document.getElementById('btnOpenOrder')?.addEventListener('click', ()=> location.href='category-order.html');
-}
+  location.href = 'watch.html';
+});
+
+catTitleBtn?.addEventListener('click', ()=> location.href='category-order.html');
+
+/* ========== storage 리스너 ========== */
+window.addEventListener('storage', (e)=>{
+  if (e.key === 'personalLabels' || e.key === 'groupOrderV1' || e.key === 'seriesGroupKeys') {
+    renderGroups();
+    applySavedSelection();
+  }
+});
+
+/* ===================== */
+/* Slide-out CSS 주입 */
+/* ===================== */
+(function injectSlideCSS(){
+  if (document.getElementById('slide-css-152')) return;
+  const style = document.createElement('style');
+  style.id = 'slide-css-152';
+  style.textContent = `
+@keyframes pageSlideLeft { from { transform: translateX(0); opacity:1; } to { transform: translateX(-22%); opacity:.92; } }
+@keyframes pageSlideRight{ from { transform: translateX(0); opacity:1; } to { transform: translateX(22%);  opacity:.92; } }
+:root.slide-out-left  body { animation: pageSlideLeft 0.26s ease forwards; }
+:root.slide-out-right body { animation: pageSlideRight 0.26s ease forwards; }
+@media (prefers-reduced-motion: reduce){
+  :root.slide-out-left  body,
+  :root.slide-out-right body { animation:none; }
+}`;
+  document.head.appendChild(style);
+})();
 
 /* ===================== */
 /* 단순형 스와이프 */
 /* ===================== */
 function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZoneCenterRatio=0.30 } = {}){
   let sx=0, sy=0, t0=0, tracking=false;
-  const THRESH_X = 70, MAX_OFF_Y = 80, MAX_TIME = 600;
+  const THRESH_X = 70, MAX_OFF_Y = 80, MAX_TIME  = 600;
   const getPoint=(e)=> e.touches?.[0] || e.changedTouches?.[0] || e;
 
   function onStart(e){
@@ -379,7 +412,7 @@ function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZo
 initSwipeNav({ goLeftHref:'upload.html', goRightHref:'list.html', deadZoneCenterRatio:0.30 });
 
 /* ===================== */
-/* 고급형 스와이프 */
+/* 고급형 스와이프(드래그 팔로우) */
 /* ===================== */
 (function(){
   function initDragSwipe({ goLeftHref=null, goRightHref=null, threshold=60, slop=45, timeMax=700, feel=1.0, deadZoneCenterRatio=0.15 }={}){
@@ -439,10 +472,11 @@ initSwipeNav({ goLeftHref:'upload.html', goRightHref:'list.html', deadZoneCenter
   initDragSwipe({ goLeftHref:'upload.html', goRightHref:'list.html', threshold:60, slop:45, timeMax:700, feel:1.0, deadZoneCenterRatio:0.15 });
 })();
 
-/* ---------- 부팅 ---------- */
+/* ===================== */
+/* 부팅 */
+/* ===================== */
 (async function boot(){
-  await loadCategories();      // ← 여기서 모듈 로딩 실패해도 페이지 나머지는 살려둠
+  await loadCategories();      // categories 로딩(실패해도 페이지는 살아있게)
   renderGroups();
   applySavedSelection();
-  wireCTA();
 })();
