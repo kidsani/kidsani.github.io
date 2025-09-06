@@ -1,9 +1,13 @@
+<!-- upload.html (KidsAni v0.3.0) -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>추천영상 등록 - CopyTube</title>
+  <title>추천영상 등록 - KidsAni</title>
+
+  <!-- (선택) YouTube Data API 키를 여기에 지정하면 시리즈의 유튜브 업로드시간을 정확히 반영합니다. -->
+  <!-- <script>window.YT_API_KEY = "YOUR_YOUTUBE_API_KEY";</script> -->
 
   <!-- CSP -->
   <meta http-equiv="Content-Security-Policy" content="
@@ -77,8 +81,9 @@
 <body>
   <header id="topbar">
     <div class="brand">
-      <a id="brandHome" href="./" aria-label="CopyTube 홈으로">
-        <img class="brand-logo" src="image/kidsani_r_side.png" alt="CopyTube"/>
+      <a id="brandHome" href="./" aria-label="KidsAni 홈으로">
+        <!-- 프로젝트 이미지 경로는 그대로 사용 가능; 필요시 kidsani 전용 이미지로 교체 -->
+        <img class="brand-logo" src="image/copytube_logo_side.png" alt="KidsAni"/>
       </a>
     </div>
     <div class="right" style="position:relative;">
@@ -87,7 +92,8 @@
       <span id="welcome" class="welcome"></span>
       <button id="menuBtn" class="icon" aria-label="menu">三</button>
       <div id="dropdownMenu" class="dropdown hidden" role="menu" aria-hidden="true">
-        <button id="btnAbout" type="button">CopyTube는…</button>
+        <button id="btnAbout" type="button">KidsAni는…</button>
+        <button id="btnNick" type="button">닉네임 변경</button>
         <button id="btnMyUploads" type="button">내영상관리</button>
         <button id="btnSignOut" type="button">Sign out</button>
         <button id="btnList" type="button">영상목록</button>
@@ -124,12 +130,12 @@
           • 위의 <b>“아래부터/위부터 등록”</b> 옵션으로 등록 순서를 결정합니다. (피드가 최신순이라 시리즈는 보통 <b>아래부터 등록</b>해야 차례대로 볼 수 있습니다.)<br/><br/>
           • <b>HTTPS</b> 환경에서만 동작합니다. (GitHub Pages OK)<br/>
           • <b>iPhone/iPad (iOS 16+)</b>: 처음 붙여넣기 때 <i>“이 앱에서 붙여넣기 허용”</i> 팝업에서 <b>허용</b>을 선택하세요.<br/>
-          • <b>안드로이드/데스크탑 Chrome</b>: <b>설정 → 사이트 설정 → 클립보드</b>에서 <code>https://copytube.github.io</code>를 <b>허용</b>으로 변경하세요.<br/>
+          • <b>안드로이드/데스크탑 Chrome</b>: <b>설정 → 사이트 설정 → 클립보드</b>에서 사이트를 <b>허용</b>으로 변경하세요.<br/>
           • 또는 그냥, <b>길게 누르기 → 붙여넣기</b> 또는 <code>Ctrl/⌘+V</code>를 사용하면 됩니다.
         </div>
       </details>
 
-      <p style="margin:10px 0 6px;color:#bfc6ce;">카테고리는 <b>최대 3개</b>까지 선택 가능합니다.</p>
+      <p style="margin:10px 0 6px;color:#bfc6ce;">카테고리는 <b>최대 3개</b>까지 선택 가능합니다. (시리즈/개인자료는 <b>단독 등록</b>)</p>
       <div id="cats"></div>
 
       <button id="btnSubmitBottom" class="btn-submit" type="button" style="width:100%;margin-top:10px;min-height:56px;">등록</button>
@@ -137,7 +143,7 @@
     </div>
   </main>
 
-  <!-- 모든 로직은 외부 모듈에서 처리 -->
-  <script type="module" src="js/upload.js?v=1.3.1"></script>
+  <!-- 로직 -->
+  <script type="module" src="js/upload.js?v=0.3.0"></script>
 </body>
 </html>
