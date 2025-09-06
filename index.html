@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>KidsAni - 카테고리 선택</title>
 
+  <!-- CSP -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     connect-src 'self' https://www.googleapis.com https://firestore.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseinstallations.googleapis.com https://www.gstatic.com https://www.youtube.com;
@@ -18,45 +19,56 @@
 
   <link rel="stylesheet" href="css/style.css"/>
 
-  <!-- 칩 토글(등록순/최신순/가나다) 전용 최소 스타일 -->
+  <!-- 카테고리 칩 토글 최소 스타일 -->
   <style>
     :root{ --cta-width:148px; }
     .lead{ font-size:20px; color:#e6e6e6; margin:0 0 6px; }
     .sublead{ font-size:14px; color:#9aa0a6; margin:0 0 12px; }
 
     .cta-row{
-      display:grid; grid-template-columns:1fr var(--cta-width) auto 1fr; align-items:center; column-gap:10px; margin:4px 0;
+      display:grid; grid-template-columns:1fr var(--cta-width) auto 1fr;
+      align-items:center; column-gap:10px; margin:4px 0;
     }
-    .btn-primary{ grid-column:2; padding:8px 14px; border:0; border-radius:8px; background:#4ea1ff; color:#fff; font-weight:800; cursor:pointer; font-size:18px; width:var(--cta-width); text-align:center; }
+    .btn-primary{
+      grid-column:2; padding:8px 14px; border:0; border-radius:8px;
+      background:#4ea1ff; color:#fff; font-weight:800; cursor:pointer;
+      font-size:18px; width:var(--cta-width); text-align:center;
+    }
     .inline-check{ display:inline-flex; align-items:center; gap:8px; font-size:13px; color:#ddd; user-select:none; line-height:1; }
-    .inline-check input{ width:16px; height:16px; margin:0; accent-color:#4ea1ff; appearance:auto; vertical-align:middle; }
+    .inline-check input{ width:16px; height:16px; margin:0; accent-color:#4ea1ff; vertical-align:middle; }
     .cta-row .inline-check:not(.ghost){ grid-column:3; justify-self:flex-start; }
     .cta-row .inline-check.ghost{ display:none; }
 
     .cat-head{
-      display:grid; grid-template-columns:1fr var(--cta-width) auto 1fr; align-items:center; column-gap:0; margin:0;
+      display:grid; grid-template-columns:1fr var(--cta-width) auto 1fr;
+      align-items:center; column-gap:0; margin:0;
     }
     .cat-title{
       grid-column:2; display:inline-block; width:var(--cta-width);
-      margin:0; padding:8px 14px; background:transparent; border:0; border-radius:8px; color:#fff;
-      font-weight:800; font-size:20px; text-align:center; user-select:none; cursor:pointer;
-      appearance:none; -webkit-appearance:none;
+      margin:0; padding:8px 14px; background:transparent; border:0;
+      border-radius:8px; color:#fff; font-weight:800; font-size:20px;
+      text-align:center; user-select:none; cursor:pointer;
     }
     .cat-title:active{ transform:translateY(0.5px); }
     .cat-right{ grid-column:3; }
 
-    .group{ border:1px solid var(--border); border-radius:12px; background:var(--bg-3); padding:4px; margin:4px 0; text-align:left; max-width:900px; margin-left:auto; margin-right:auto; }
-    .group legend{ display:flex; align-items:center; gap:8px; padding:0 4px; font-weight:800; font-size:15px; color:#eee; margin-bottom:0; line-height:1.05; }
-    .group .group-toggle{ display:inline-flex; align-items:center; gap:8px; padding:6px 8px; border-radius:8px; background:#101010; border:1px solid #2a2a2a; color:#e5e7eb; cursor:pointer; font-weight:800; }
+    .group{ border:1px solid var(--border); border-radius:12px; background:var(--bg-3);
+      padding:4px; margin:4px 0; text-align:left; max-width:900px; margin-left:auto; margin-right:auto; }
+    .group legend{ display:flex; align-items:center; gap:8px; padding:0 4px;
+      font-weight:800; font-size:15px; color:#eee; margin-bottom:0; line-height:1.05; }
+    .group .group-toggle{ display:inline-flex; align-items:center; gap:8px;
+      padding:6px 8px; border-radius:8px; background:#101010;
+      border:1px solid #2a2a2a; color:#e5e7eb; cursor:pointer; font-weight:800; }
     .group .group-toggle input{ accent-color:#4ea1ff; }
     .child-grid{ margin-top:0; display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:4px; }
     @media (min-width:900px){ .child-grid{ grid-template-columns:repeat(4, minmax(0,1fr)); } }
-    .child-grid label{ background:#0f0f0f; border:1px solid #2a2a2a; border-radius:8px; padding:6px 8px; font-size:14px; line-height:1.2; display:flex; gap:6px; align-items:center; justify-content:flex-start; position:relative; }
+    .child-grid label{ background:#0f0f0f; border:1px solid #2a2a2a; border-radius:8px;
+      padding:6px 8px; font-size:14px; line-height:1.2;
+      display:flex; gap:6px; align-items:center; justify-content:flex-start; }
 
-    /* ----- 시리즈 정렬 칩 (등록순 ↔ 최신순 ↔ 가나다순) ----- */
+    /* 시리즈 정렬 칩 */
     .chip-toggle{
-      margin-left:auto;
-      font-size:12px; line-height:1;
+      margin-left:auto; font-size:12px; line-height:1;
       padding:2px 8px; border-radius:999px;
       background:#151515; color:#ddd; border:1px solid #2a2a2a;
       cursor:pointer; user-select:none;
@@ -65,11 +77,15 @@
     .chip-toggle:active{ transform:translateY(0.5px); }
   </style>
 
-  <!-- PWA Manifest -->
+  <!-- PWA Manifest / 아이콘 -->
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#000000">
   <link rel="icon" type="image/png" sizes="192x192" href="image/kidsani_logo_192r.png">
   <link rel="icon" type="image/png" sizes="512x512" href="image/kidsani_logo_512r.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="image/kidsani_logo_192r.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="KidsAni">
 
   <!-- Open Graph -->
   <meta property="og:title" content="KidsAni" />
@@ -108,7 +124,8 @@
 
   <section class="intro">
     <div style="width:100%; max-width:980px; margin:0 auto;">
-      <p class="lead">영상보기를 눌러 선택된 카테고리의</p> <p class="lead">영상을 시청하세요.</p>
+      <p class="lead">영상보기를 눌러 선택된 카테고리의</p>
+      <p class="lead">영상을 시청하세요.</p>
       <p class="sublead">첫 화면 상단
         <img src="image/mute.jpg" alt="음소거 아이콘" class="icon-mute" width="16" height="16" loading="lazy" decoding="async">
         을 눌러 음소거를 해제해 주세요.
@@ -118,9 +135,7 @@
         <label class="inline-check ghost" aria-hidden="true">
           <input type="checkbox" disabled/> 연속재생
         </label>
-
         <button id="btnWatch" class="btn-primary">▶ 영상보기</button>
-
         <label class="inline-check" id="autoNextWrap" title="영상 종료 시 자동으로 다음 영상으로 이동">
           <input type="checkbox" id="cbAutoNext"/> 연속재생
         </label>
@@ -136,6 +151,11 @@
       </div>
 
       <div id="cats"></div>
+
+      <!-- 안내문 -->
+      <div style="margin:12px 4px 0; font-size:13px; color:#aaa;">
+        자세한 사용법은 상단 오른쪽 메뉴의 <b>[KidsAni는..]</b> 를 참조해주세요.
+      </div>
     </div>
   </section>
 
@@ -144,5 +164,14 @@
   <script type="module" src="js/auth.js?v=0.1.0"></script>
   <script type="module" src="js/categories.js?v=1.6.0"></script>
   <script type="module" src="js/index.js?v=1.9.0"></script>
+
+  <!-- 서비스워커 등록 -->
+  <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(console.warn);
+    });
+  }
+  </script>
 </body>
 </html>
