@@ -1,14 +1,13 @@
-// js/list.js (v2.1.0) — KidsAni
-// 전략 A: 카테고리별 쿼리 → 병합
-// + 개인자료(localStorage) 모드 복원
-// - 개인자료: localStorage slot(personal1/2) 읽기(목록/검색/시청)
-// - 일반: Firestore (최신순) / 시리즈: seriesSortPrefs(등록/최신/가나다) 반영
-// - 카드 레이아웃: 좌(제목/칩/닉네임), 우(썸네일→watch)
-// - 검색, 무한 스크롤, 게스트/로그인 공통, 스와이프: 우→좌(index로만)
+// js/list.js (v2.2.0) — KidsAni
+// - Firestore 필드명 정합: categories→cats, thumbnail→thumb
+// - 시리즈 정렬: seriesSortAt/createdAt/title
+// - 개인자료 로컬키 통일: kidsani_{slot}
+// - 검색/칩/썸네일/큐 생성 모두 cats/thumb 기준
+// - 중복 로드 제거(이 파일이 필요한 모듈들을 import)
 
 import { auth, db } from './firebase-init.js?v=0.1.0';
 import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.0';
-import { CATEGORY_GROUPS } from './categories.js?v=1.6.0';
+import { CATEGORY_GROUPS } from './categories.js?v=0.2.1';
 import {
   collection, getDocs, getDoc, doc, query, where, orderBy, limit, startAfter
 } from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
@@ -17,17 +16,18 @@ import {
 window.__swipeNavigating = window.__swipeNavigating || false;
 
 /* ---------- Topbar ---------- */
-const signupLink   = document.getElementById('signupLink');
-const signinLink   = document.getElementById('signinLink');
-const welcome      = document.getElementById('welcome');
-const menuBtn      = document.getElementById('menuBtn');
-const dropdown     = document.getElementById('dropdownMenu');
-const btnSignOut   = document.getElementById('btnSignOut');
-const btnGoUpload  = document.getElementById('btnGoUpload');
-const btnAbout     = document.getElementById('btnAbout');
-const btnList      = document.getElementById('btnList');
-const btnMyUploads = document.getElementById('btnMyUploads');
-const btnNick      = document.getElementById('btnNick');
+const $ = (s)=>document.querySelector(s);
+const signupLink   = $('#signupLink');
+const signinLink   = $('#signinLink');
+const welcome      = $('#welcome');
+const menuBtn      = $('#menuBtn');
+const dropdown     = $('#dropdownMenu');
+const btnSignOut   = $('#btnSignOut');
+const btnGoUpload  = $('#btnGoUpload');
+const btnAbout     = $('#btnAbout');
+const btnList      = $('#btnList');
+const btnMyUploads = $('#btnMyUploads');
+const btnNick      = $('#btnNick');
 
 function openDropdown(){ dropdown?.classList.remove('hidden'); requestAnimationFrame(()=> dropdown?.classList.add('show')); }
 function closeDropdown(){ dropdown?.classList.remove('show'); setTimeout(()=> dropdown?.classList.add('hidden'), 180); }
@@ -68,11 +68,11 @@ let hasMore   = true;
 
 /* 전략 A 상태 */
 const loaders = [];   // [{ cat, isSeries, mode, cursor, exhausted, items:[] }]
-let merged    = [];   // 누적 병합 결과(표시 용)
+let merged    = [];   // 누적 병합 결과(표시)
 
 /* ---------- 유틸 ---------- */
 function setStatus(t){ if($msg) $msg.textContent = t || ''; }
-function toggleMore(show){ if($btnMore) $btnMore.style.display = show ? '' : 'none'; }
+function toggleMore(show){ if($btnMore) $btnMore.parentElement.style.display = show ? '' : 'none'; }
 function esc(s=''){ return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
 
 function extractId(url=''){ const m = String(url).match(/(?:youtu\.be\/|v=|shorts\/|embed\/)([^?&\/]+)/); return m ? m[1] : ''; }
@@ -80,7 +80,7 @@ function toThumb(url,fallback=''){ const id=extractId(url); return id?`https://i
 
 /* 카테고리 라벨 */
 const LABEL_MAP = (()=>{ const m={}; CATEGORY_GROUPS.forEach(g=> g.children?.forEach(c=> { if(c?.value) m[c.value]=c.label||c.value; })); return m; })();
-function getLabel(key){ return LABEL_MAP[key]||key; }
+const getLabel = (key)=> LABEL_MAP[key]||key;
 
 /* 선택 카테고리 */
 function readSelectedCats(){
@@ -93,9 +93,9 @@ function readSelectedCats(){
 }
 
 /* 시리즈/개인 구분 */
-const SERIES_VALUES = new Set(CATEGORY_GROUPS.filter(g=>g.series).flatMap(g=> g.children?.map(c=>c.value) || []));
+const SERIES_VALUES   = new Set(CATEGORY_GROUPS.filter(g=>g.series).flatMap(g=> g.children?.map(c=>c.value) || []));
 const PERSONAL_VALUES = new Set(CATEGORY_GROUPS.filter(g=>g.personal).flatMap(g=> g.children?.map(c=>c.value) || []));
-const ALL_NORMAL_VALUES = CATEGORY_GROUPS.filter(g=> !g.series && !g.personal).flatMap(g=> g.children?.map(c=>c.value) || []);
+const NORMAL_VALUES   = CATEGORY_GROUPS.filter(g=> !g.series && !g.personal).flatMap(g=> g.children?.map(c=>c.value) || []);
 
 /* seriesSortPrefs */
 function loadSeriesPrefs(){ try{ return JSON.parse(localStorage.getItem(SERIES_PREFS_KEY) || '{}'); }catch{ return {}; } }
@@ -152,16 +152,23 @@ const NickCache = {
   get(uid){ return this.map.get(uid) || ''; },
   set(uid, name){ if(uid) this.map.set(uid, String(name||'')); }
 };
-function ownerUidOf(d = {}){ return d?.ownerUid || d?.uid || d?.userUid || null; }
+function ownerUidOf(d = {}){ return d?.uid || d?.ownerUid || d?.userUid || null; }
 async function preloadNicknamesFor(docs){
   const uids = new Set();
-  docs.forEach(x => { const uid = ownerUidOf(x.data); if (uid && !NickCache.map.has(uid)) uids.add(uid); });
+  docs.forEach(x => {
+    const d = x.data || {};
+    const uid = ownerUidOf(d);
+    if (!uid || NickCache.map.has(uid)) return;
+    // 문서에 uNickname 있으면 그걸 우선 쓰고, 없으면 users/{uid} 조회
+    if (d.uNickname){ NickCache.set(uid, d.uNickname); }
+    else uids.add(uid);
+  });
   if (!uids.size) return;
   await Promise.all([...uids].map(async (uid) => {
     try{
       const snap = await getDoc(doc(db, 'users', uid));
       const prof = snap.exists() ? snap.data() : null;
-      const name = prof?.nickname || prof?.displayName || '';
+      const name = prof?.displayName || prof?.nickname || '';
       NickCache.set(uid, name);
     }catch{ NickCache.set(uid, ''); }
   }));
@@ -180,7 +187,7 @@ function getPersonalSlot(){
   catch{ return null; }
 }
 function readPersonalItems(slot){
-  try{ const arr = JSON.parse(localStorage.getItem(`copytube_${slot}`) || '[]'); return Array.isArray(arr) ? arr : []; }
+  try{ const arr = JSON.parse(localStorage.getItem(`kidsani_${slot}`) || '[]'); return Array.isArray(arr) ? arr : []; }
   catch{ return []; }
 }
 function getPersonalLabel(slot){
@@ -256,7 +263,8 @@ function buildLoaders(){
 
   let targets = [];
   if (sel === 'ALL'){
-    targets = ALL_NORMAL_VALUES.slice(); // 일반 전체 (시리즈/개인 제외)
+    // 기본: 일반 카테고리 전체만 노출 (제품 의도 유지)
+    targets = NORMAL_VALUES.slice();
   } else {
     targets = sel.filter(v => !PERSONAL_VALUES.has(v)); // 개인 제외
   }
@@ -274,15 +282,15 @@ function buildLoaders(){
 async function loadOneLoader(ld, perCatLimit){
   if (ld.exhausted) return [];
 
-  const parts = [ where('categories','array-contains', ld.cat) ];
+  const parts = [ where('cats','array-contains', ld.cat) ];
   // 정렬
   if (ld.isSeries){
     if (ld.mode === 'title'){
       parts.push(orderBy('title','asc'));
     } else if (ld.mode === 'registered'){
       parts.push(orderBy('createdAt','asc'));
-    } else { // latest
-      parts.push(orderBy('createdAt','desc'));
+    } else { // latest(업로드시각 기반)
+      parts.push(orderBy('seriesSortAt','desc'));
     }
   } else {
     parts.push(orderBy('createdAt','desc'));
@@ -291,7 +299,16 @@ async function loadOneLoader(ld, perCatLimit){
   if (ld.cursor) parts.push(startAfter(ld.cursor));
   parts.push(limit(perCatLimit));
 
-  const snap = await getDocs(query(collection(db,'videos'), ...parts));
+  let snap;
+  try{
+    snap = await getDocs(query(collection(db,'videos'), ...parts));
+  }catch(e){
+    console.error('[list] query failed (index needed?)', e);
+    setStatus('인덱스가 필요한 정렬입니다. 콘솔의 오류 링크로 인덱스를 생성해 주세요.');
+    ld.exhausted = true;
+    return [];
+  }
+
   if (snap.empty){ ld.exhausted = true; return []; }
 
   const batch = snap.docs.map(d => ({ id:d.id, data:d.data(), _created:(d.data()?.createdAt?.toMillis?.()||0) }));
@@ -302,7 +319,6 @@ async function loadOneLoader(ld, perCatLimit){
 
 // 새로 꺼낸 아이템 조각(Chunk)을 merged에 추가
 function takeMergedChunkAndAppend(){
-  // 시리즈 로더와 일반 로더 분리
   const seriesLoaders = loaders.filter(l=> l.isSeries);
   const normalLoaders = loaders.filter(l=> !l.isSeries);
 
@@ -326,7 +342,6 @@ function takeMergedChunkAndAppend(){
   const newChunk = seriesChunk.concat(normalsChunk);
   if (newChunk.length) merged = merged.concat(newChunk);
 
-  // 남은 게 있는지 확인
   const anyBuffered = loaders.some(l => l.items.length > 0);
   const anyAlive    = loaders.some(l => !l.exhausted);
   hasMore = anyBuffered || anyAlive;
@@ -363,8 +378,6 @@ async function ensureAtLeast(totalTarget = PAGE_SIZE, perCatMin = PER_CAT_MIN_LO
     guard++;
   }
 
-  // 병합하여 merged에 추가
-  const before = merged.length;
   const newChunk = takeMergedChunkAndAppend();
 
   // 닉네임 프리로드(신규분에 대해)
@@ -384,7 +397,7 @@ function filterSearch(list){
     const id  = extractId(d.url || '');
     const tt  = String(d.title || lazyTitleMap.get(id) || '').toLowerCase();
     const uid = ownerUidOf(d);
-    const nick= (NickCache.get(uid) || '').toLowerCase();
+    const nick= (NickCache.get(uid) || d.uNickname || '').toLowerCase();
     const domain = (()=>{ try{ const u = new URL(d.url); return u.hostname.toLowerCase(); }catch{ return ''; }})();
     return tt.includes(q) || url.includes(q) || nick.includes(q) || domain.includes(q);
   });
@@ -398,6 +411,7 @@ function render(){
   $cards.innerHTML = '';
   if (!list.length){
     $cards.innerHTML = `<div style="padding:14px;border:1px dashed var(--border);border-radius:12px;color:#cfcfcf;">결과가 없습니다.</div>`;
+    toggleMore(hasMore);
     return;
   }
 
@@ -406,10 +420,10 @@ function render(){
     const d     = x.data || {};
     const title = d.title || '(제목 없음)';
     const url   = d.url || '';
-    const catsV = Array.isArray(d.categories) ? d.categories : [];
-    const thumb = d.thumbnail || toThumb(url);
+    const catsV = Array.isArray(d.cats) ? d.cats : [];
+    const thumb = d.thumb || toThumb(url);
     const uid   = ownerUidOf(d);
-    const nick  = NickCache.get(uid) || '회원';
+    const nick  = NickCache.get(uid) || d.uNickname || '회원';
 
     const chipsHTML = catsV.map(v => `<span class="chip" title="${esc(getLabel(v))}">${esc(getLabel(v))}</span>`).join('');
 
@@ -435,17 +449,19 @@ function render(){
     frag.appendChild(card);
   });
   $cards.appendChild(frag);
+  toggleMore(hasMore);
 }
 
 /* ---------- watch로 이동(현재 렌더 순서 기준 큐) ---------- */
 function openInWatch(list, index){
   const queue = list.map(x => {
-    const id = extractId(x.data?.url || '');
+    const d = x.data || {};
+    const id = extractId(d.url || '');
     return {
       id: x.id,
-      url: x.data?.url || '',
-      title: x.data?.title || lazyTitleMap.get(id) || '',
-      cats: Array.isArray(x.data?.categories) ? x.data.categories : []
+      url: d.url || '',
+      title: d.title || lazyTitleMap.get(id) || '',
+      cats: Array.isArray(d.cats) ? d.cats : []
     };
   });
   sessionStorage.setItem('playQueue', JSON.stringify(queue));
@@ -559,7 +575,6 @@ function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZo
 }
 initSwipeNav({ goLeftHref: 'index.html', goRightHref: null, deadZoneCenterRatio: 0.30 });
 
-/* 끌리는 모션(오른쪽 이동 차단) */
 (function(){
   function initDragSwipe({ goLeftHref=null, threshold=60, slop=45, timeMax=700, feel=1.0, deadZoneCenterRatio=0.15 }={}){
     const page = document.querySelector('main') || document.body;
@@ -586,7 +601,7 @@ initSwipeNav({ goLeftHref: 'index.html', goRightHref: null, deadZoneCenterRatio:
 
       const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
       const dz = Math.max(0, Math.min(0.9, deadZoneCenterRatio));
-      const L  = vw * (0.5 - dz/2), R = vw * (0.5 + dz/2);
+      const L  = vw * (0.5 - dz/2), R  = vw * (0.5 + dz/2);
       if (t.clientX >= L && t.clientX <= R) return;
 
       x0 = t.clientX; y0 = t.clientY; t0 = Date.now();
@@ -601,7 +616,7 @@ initSwipeNav({ goLeftHref: 'index.html', goRightHref: null, deadZoneCenterRatio:
       const dx = t.clientX - x0;
       const dy = t.clientY - y0;
       if(Math.abs(dy) > slop){ canceled = true; active = false; reset(true); return; }
-      // 오른쪽 이동(없음) 차단
+      // 오른쪽 이동 차단
       if (dx > 0){ page.style.transform = 'translateX(0px)'; return; }
       e.preventDefault();
       page.style.transform = 'translateX(' + (dx * feel) + 'px)';
