@@ -52,36 +52,7 @@
     </main>
   </div>
 
-  <script type="module">
-    import { signInWithGoogle, onAuthStateChanged } from './js/auth.js';
-
-    const btn = document.getElementById('btnGoogle');
-    const msg = document.getElementById('msg');
-
-    function show(text, ok=false){
-      msg.textContent = text;
-      msg.className = 'msg show ' + (ok ? 'ok':'err');
-    }
-
-    onAuthStateChanged(user=>{
-      if(user){
-        // 이미 로그인 상태면 닉네임 여부에 따라 라우팅은 signin.js와 동일하게 처리해도 되지만,
-        // 여기서는 간단히 nick.html로 보냅니다(없으면 등록, 있으면 변경 화면).
-        location.replace('nick.html');
-      }
-    });
-
-    btn.addEventListener('click', async ()=>{
-      try{
-        await signInWithGoogle();
-        show('로그인 성공! 닉네임을 정하러 갈게요…', true);
-        setTimeout(()=> location.href='nick.html', 300);
-      }catch(e){
-        show('구글 인증에 실패했어요. 잠시 후 다시 시도해 주세요.');
-        console.error(e);
-      }
-    });
-  </script>
+  <script type="module" src="./js/signup.js"></script>
 </body>
 </html>
 <!-- ---------- end of signup.html ---------- -->
