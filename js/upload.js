@@ -6,6 +6,7 @@
 // - YouTube Data API (있으면 사용)로 시리즈 영상의 업로드시간(ytPublishedAt) 조회 → seriesSortAt = ytPublishedAt || createdAt
 // - 문서 ID = ytid (전역 중복 방지). 다른 소유자가 이미 등록한 경우 건너뜀.
 // - 상단바/드롭다운, 오른쪽 스와이프 → index 이동
+console.log(new URL('./firebase-init.js?v=0.1.0', import.meta.url).href);
 
 import { auth, db } from './firebase-init.js?v=0.1.0';
 import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.0';
