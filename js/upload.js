@@ -9,7 +9,7 @@
 console.log(new URL('./firebase-init.js?v=0.1.0', import.meta.url).href);
 
 import { auth, db } from './firebase-init.js?v=0.1.0';
-import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.0';
+import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.1';
 import {
   doc, getDoc, setDoc, serverTimestamp, collection, getDocs, query, where, updateDoc, Timestamp
 } from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
