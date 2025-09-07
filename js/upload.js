@@ -469,7 +469,11 @@ async function submitAll(){
       if(isSeries){
         baseData.seriesSortAt = ytPublishedAt || serverTimestamp();
       }
-
+console.log('WRITE payload', {
+  path: `videos/${id}`,
+  uid: auth.currentUser.uid,
+  data: baseData
+});
       await setDoc(ref, baseData, { merge: true });
       ok++;
     }catch(e){
