@@ -5,7 +5,7 @@ import {
   doc, getDoc, updateDoc, deleteDoc
 } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js';
 import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js';
-import { CATEGORIES } from './categories.js';
+import { CATEGORIES_GROUPS } from './categories.js';
 
 /**
  * videos 문서 필드(가정):
