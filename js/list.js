@@ -1,7 +1,11 @@
-// js/list.js — 완전판 (CATEGORY_GROUPS → CATEGORIES 어댑터 포함)
-// 기능: 권한/일괄액션(선택 삭제·카테고리), 시리즈 정렬(등록/유튜브/가나다 + 방향토글),
-// 무한 스크롤(+더보기 폴백), 클라 검색, 상태 복원(localStorage), 인덱스 에러 배너,
-// 썸네일/링크 보강, 기존 sortSelect 호환
+// js/list.js — KidsAni v2.0.2 (완전판)
+// - Firebase SDK 12.1.0로 통일
+// - DOMContentLoaded 보장 + 널가드(방탄) 적용
+// - CATEGORY_GROUPS → CATEGORIES 어댑터 포함
+// - 권한/일괄액션(선택 삭제·카테고리 변경)
+// - 시리즈 정렬(등록/유튜브정렬/가나다 + 방향 토글)
+// - 무한 스크롤(+더보기 폴백), 클라 검색, 상태 복원(localStorage)
+// - 인덱스(색인) 안내 배너, 썸네일/링크 보강
 
 import { auth, db } from './firebase-init.js';
 import {
@@ -24,53 +28,7 @@ const CATEGORIES = CATEGORY_GROUPS.reduce((acc, g) => {
   return acc;
 }, {});
 
-/**
- * videos 문서 필드(가정):
- *  - title: string
- *  - url: string
- *  - cats: string[]
- *  - createdAt: Timestamp
- *  - ownerUid, ownerNick
- *  - seriesKey?: string
- *  - seriesTitle?: string
- *  - episode?: number
- *  - seriesSortAt?: Timestamp (유튜브 업로드시각 등)
- *  - thumb?: string
- *
- * 인덱스(권장):
- * 1) cats array-contains + createdAt desc
- * 2) cats array-contains + createdAt asc
- * 3) cats array-contains + title asc
- * 4) cats array-contains + title desc
- * 5) cats array-contains + seriesSortAt desc
- * 6) cats array-contains + seriesSortAt asc
- */
-
-const $catSelect   = document.getElementById('catSelect');
-const $sortSelect  = document.getElementById('sortSelect');  // 호환용(숨김일 수 있음)
-const $keyword     = document.getElementById('keyword');
-const $refresh     = document.getElementById('refreshBtn');
-const $more        = document.getElementById('moreBtn');
-const $list        = document.getElementById('list');
-const $empty       = document.getElementById('empty');
-const $banner      = document.getElementById('errorBanner');
-
-const $dirToggleBtn      = document.getElementById('dirToggleBtn');      // 방향 토글
-const $seriesSortFields  = document.getElementById('seriesSortFields');  // 시리즈 정렬 라디오 컨테이너
-const $seriesFieldRadios = $seriesSortFields
-  ? Array.from($seriesSortFields.querySelectorAll('input[name="sortField"]'))
-  : [];
-
-const $bulkChangeBtn = document.getElementById('bulkChangeBtn');
-const $bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
-const $selCount      = document.getElementById('selCount');
-const $catDialog     = document.getElementById('catDialog');
-const $catDialogBody = document.getElementById('catDialogBody');
-const $catSaveBtn    = document.getElementById('catSaveBtn');
-
-const $sentinel = document.getElementById('sentinel');
-
-/* ===== 상태 ===== */
+/* ===== 상수/상태 ===== */
 const PAGE_SIZE = 30;
 const LS_KEY = {
   CAT: 'list.cat',
@@ -80,7 +38,7 @@ const LS_KEY = {
   SCROLL: 'list.scrollY'
 };
 
-let state = {
+const state = {
   user: null,
   isAdmin: false,
 
@@ -96,80 +54,48 @@ let state = {
 
   selectedIds: new Set(),
 
-  io: null,               // IntersectionObserver
-  restoringScroll: false, // 최초 스크롤 복원
+  io: null,
+  restoringScroll: false,
+  _scrollTick: false,
 };
 
-function $(sel, root=document){ return root.querySelector(sel); }
-function textNode(s){ return document.createTextNode(s); }
-function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+/* ===== 유틸 ===== */
+const $ = (sel, root = document) => root.querySelector(sel);
+const textNode = (s) => document.createTextNode(s);
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
-/* ===== 권한 ===== */
-onAuthStateChanged(auth, async (user)=>{
-  state.user = user || null;
-  state.isAdmin = await isAdmin(user?.uid);
-  syncBulkButtons();
-});
-async function isAdmin(uid){
-  if(!uid) return false;
-  try{
-    const snap = await getDoc(doc(db,'admins',uid));
-    return snap.exists();
-  }catch{ return false; }
-}
-
-/* ===== 카테고리 셀렉트 초기화 ===== */
-(function initCategoriesSelect(){
-  Object.entries(CATEGORIES).forEach(([groupKey, group])=>{
-    const og = document.createElement('optgroup');
-    og.label = group.label ?? groupKey;
-    (group.items||[]).forEach(cat=>{
-      const opt = document.createElement('option');
-      opt.value = cat.value;
-      opt.textContent = cat.label || cat.value;
-      og.appendChild(opt);
-    });
-    $catSelect.appendChild(og);
-  });
-})();
-
-/* ===== 시리즈 그룹 판정 ===== */
-function isSeriesCategory(catValue){
-  if(!catValue) return false;
+function labelFromCat(value){
   for (const [, group] of Object.entries(CATEGORIES)){
-    const isSeriesGroup = !!group.series || (group.label || '').includes('시리즈');
-    if(!isSeriesGroup) continue;
-    if((group.items||[]).some(it=> it.value === catValue)) return true;
+    for (const item of (group.items||[])){
+      if (item.value === value) return item.label || value;
+    }
   }
-  return false;
+  return value;
 }
-
-/* ===== 정렬 라벨 갱신 ===== */
-function updateDirToggleLabel(field, dir){
-  if(!$dirToggleBtn) return;
-  if(field === 'createdAt'){
-    $dirToggleBtn.textContent = (dir==='desc' ? '최신순' : '등록순');
-  }else if(field === 'seriesSortAt'){
-    $dirToggleBtn.textContent = (dir==='desc' ? '최신화' : '오래된화');
-  }else if(field === 'title'){
-    $dirToggleBtn.textContent = (dir==='asc' ? '가나다' : '역가나다');
-  }else{
-    $dirToggleBtn.textContent = (dir==='desc' ? '내림차순' : '오름차순');
-  }
+function fmtDateTime(d){
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  const hh = String(d.getHours()).padStart(2,'0');
+  const mm = String(d.getMinutes()).padStart(2,'0');
+  return `${y}-${m}-${day} ${hh}:${mm}`;
 }
-
-/* ===== 정렬 스펙 (라디오/토글 우선, 그 외엔 기존 select) ===== */
-function getSortSpec(){
-  const seriesUIVisible = $seriesSortFields && $seriesSortFields.style.display !== 'none';
-  if(seriesUIVisible && $seriesFieldRadios.length){
-    const sel = $seriesFieldRadios.find(r=> r.checked);
-    const field = sel ? sel.value : 'createdAt';
-    updateDirToggleLabel(field, state.sortDir);
-    return { field, dir: state.sortDir };
-  }
-  const raw = ($sortSelect && $sortSelect.value) ? $sortSelect.value : 'createdAt_desc';
-  const [field, dir] = raw.split('_');
-  return { field, dir: (dir==='asc'?'asc':'desc') };
+function extractYouTubeId(url){
+  try{
+    if(!url) return '';
+    const u = new URL(url);
+    if (u.hostname === 'youtu.be') return u.pathname.slice(1);
+    if (u.hostname.includes('youtube.com')){
+      if (u.searchParams.get('v')) return u.searchParams.get('v');
+      const m = u.pathname.match(/\/(live|shorts|embed)\/([^/?#]+)/);
+      if (m) return m[2];
+    }
+  }catch{}
+  return '';
+}
+function guessThumb(url){
+  const vid = extractYouTubeId(url);
+  return vid ? `https://i.ytimg.com/vi/${vid}/hqdefault.jpg` : './image/copytube_logo_512.png';
 }
 
 /* ===== 로컬 스토리지 ===== */
@@ -193,106 +119,52 @@ function loadPrefs(){
     if(kw) state.kw = kw;
   }catch{}
 }
-function saveScrollY(){ try{ localStorage.setItem(LS_KEY.SCROLL, String(window.scrollY||0)); }catch{} }
+function saveScrollY(){
+  try{ localStorage.setItem(LS_KEY.SCROLL, String(window.scrollY || 0)); }catch{}
+}
 function loadScrollY(){
   try{
-    const y = parseInt(localStorage.getItem(LS_KEY.SCROLL)||'0',10);
+    const y = parseInt(localStorage.getItem(LS_KEY.SCROLL) || '0', 10);
     return isNaN(y) ? 0 : clamp(y, 0, 10_000_000);
   }catch{ return 0; }
 }
 
-/* ===== 이벤트 바인딩 ===== */
-if($refresh) $refresh.addEventListener('click', ()=> resetAndLoad());
-if($more) $more.addEventListener('click', ()=> loadMore());
-
-if($keyword){
-  $keyword.addEventListener('input', ()=>{
-    state.kw = ($keyword.value||'').trim().toLowerCase();
-    savePrefs();
-    applyClientSearch(); // 서버 재쿼리 없이 즉시 필터
-  });
+/* ===== 권한 ===== */
+async function isAdmin(uid){
+  if(!uid) return false;
+  try{
+    const snap = await getDoc(doc(db,'admins',uid));
+    return snap.exists();
+  }catch{ return false; }
 }
 
-if($sortSelect){
-  $sortSelect.addEventListener('change', ()=>{
-    const [field, dir] = $sortSelect.value.split('_');
-    state.sortField = field;
-    state.sortDir   = (dir==='asc'?'asc':'desc');
-    updateDirToggleLabel(state.sortField, state.sortDir);
-    savePrefs();
-    resetAndLoad();
-  });
+/* ===== 시리즈 그룹 판정 ===== */
+function isSeriesCategory(catValue){
+  if(!catValue) return false;
+  for (const [, group] of Object.entries(CATEGORIES)){
+    const isSeriesGroup = !!group.series || (group.label || '').includes('시리즈');
+    if(!isSeriesGroup) continue;
+    if ((group.items||[]).some(it=> it.value === catValue)) return true;
+  }
+  return false;
 }
 
-if($catSelect){
-  $catSelect.addEventListener('change', ()=>{
-    state.cat = $catSelect.value || '';
-    savePrefs();
-
-    const series = isSeriesCategory(state.cat);
-    if($seriesSortFields) $seriesSortFields.style.display = series ? '' : 'none';
-
-    if(series){
-      state.sortField = 'createdAt';
-      state.sortDir   = 'asc';   // 시리즈 기본: 등록순(오래→최신)
-      if($seriesFieldRadios.length){
-        const r = $seriesFieldRadios.find(x=> x.value==='createdAt');
-        if(r) r.checked = true;
-      }
-    }else{
-      state.sortField = 'createdAt';
-      state.sortDir   = 'desc';  // 일반 기본: 최신순
-      if($seriesFieldRadios.length){
-        const r = $seriesFieldRadios.find(x=> x.checked);
-        if(r) r.checked = false;
-      }
-    }
-    updateDirToggleLabel(state.sortField, state.sortDir);
-    resetAndLoad();
-  });
-}
-
-if($seriesFieldRadios.length){
-  $seriesFieldRadios.forEach(r=>{
-    r.addEventListener('change', ()=>{
-      state.sortField = r.value; // createdAt | seriesSortAt | title
-      if(state.sortField==='createdAt')        state.sortDir='asc';  // 등록순 기본
-      else if(state.sortField==='seriesSortAt') state.sortDir='desc'; // 최신화 기본
-      else if(state.sortField==='title')       state.sortDir='asc';  // 가나다 기본
-      updateDirToggleLabel(state.sortField, state.sortDir);
-      savePrefs();
-      resetAndLoad();
-    });
-  });
-}
-
-if($dirToggleBtn){
-  $dirToggleBtn.addEventListener('click', ()=>{
-    state.sortDir = (state.sortDir==='asc'?'desc':'asc');
-    updateDirToggleLabel(state.sortField, state.sortDir);
-    savePrefs();
-    resetAndLoad();
-  });
-}
-
-/* ===== 일괄 액션 ===== */
-if($bulkChangeBtn) $bulkChangeBtn.addEventListener('click', ()=>{
-  if(state.selectedIds.size===0) return;
-  openCategoryDialog([...state.selectedIds]);
-});
-if($bulkDeleteBtn) $bulkDeleteBtn.addEventListener('click', ()=>{
-  if(state.selectedIds.size===0) return;
-  onBulkDelete([...state.selectedIds]);
-});
-if($catSaveBtn){
-  $catSaveBtn.addEventListener('click', async (e)=>{
-    e.preventDefault();
-    await saveCategoryDialog();
-  });
+/* ===== 정렬 라벨 갱신 ===== */
+function updateDirToggleLabel($dirToggleBtn, field, dir){
+  if(!$dirToggleBtn) return;
+  if(field === 'createdAt'){
+    $dirToggleBtn.textContent = (dir==='desc' ? '최신순' : '등록순');
+  }else if(field === 'seriesSortAt'){
+    $dirToggleBtn.textContent = (dir==='desc' ? '최신화' : '오래된화');
+  }else if(field === 'title'){
+    $dirToggleBtn.textContent = (dir==='asc' ? '가나다' : '역가나다');
+  }else{
+    $dirToggleBtn.textContent = (dir==='desc' ? '내림차순' : '오름차순');
+  }
 }
 
 /* ===== 인덱스 에러 배너 ===== */
-function showIndexBanner(err){
+function showIndexBanner($banner, err){
   if(!$banner) return;
   const msg = String(err?.message||'');
   const m = msg.match(/https:\/\/console\.firebase\.google\.com[^\s)"]+/);
@@ -303,126 +175,21 @@ function showIndexBanner(err){
     : `정렬/필터에 필요한 색인이 없습니다. Firestore 콘솔에서 색인을 생성해 주세요.`;
 }
 
-/* ===== 초기 상태 복원 ===== */
-loadPrefs();
-if(state.cat) $catSelect.value = state.cat;
-if(state.kw){ $keyword.value = state.kw; }
-const seriesInit = isSeriesCategory(state.cat);
-if($seriesSortFields) $seriesSortFields.style.display = seriesInit ? '' : 'none';
-updateDirToggleLabel(state.sortField, state.sortDir);
-
-/* ===== 무한 스크롤 ===== */
-if('IntersectionObserver' in window && $sentinel){
-  state.io = new IntersectionObserver((entries)=>{
-    for(const e of entries){
-      if(e.isIntersecting && !state.loading && !state.reachedEnd){
-        loadMore();
-      }
-    }
-  }, { rootMargin: '200px' });
-  state.io.observe($sentinel);
-}
-
 /* ===== 쿼리 빌드 ===== */
 function buildQuery({ cat, sortField, sortDir, pageStart }){
   const baseCol = collection(db, 'videos');
   const parts = [];
   if(cat) parts.push(where('cats','array-contains',cat));
-  parts.push(orderBy(sortField, sortDir==='asc'?'asc':'desc'));
+  parts.push(orderBy(sortField, sortDir==='asc' ? 'asc' : 'desc'));
   if(pageStart) parts.push(startAfter(pageStart));
   parts.push(limit(PAGE_SIZE));
   return query(baseCol, ...parts);
 }
 
-/* ===== 로딩 ===== */
-async function resetAndLoad(){
-  if(state.loading) return;
-  state.items = [];
-  state.lastDoc = null;
-  state.reachedEnd = false;
-  state.selectedIds.clear();
-  syncBulkButtons();
-
-  $list.innerHTML = '';
-  if($empty) $empty.hidden = true;
-  if($more) $more.disabled = true;
-  if($banner) $banner.style.display = 'none';
-
-  await loadMore(true);
-}
-
-async function loadMore(first=false){
-  if(state.loading || state.reachedEnd) return;
-  state.loading = true;
-
-  try{
-    const q = buildQuery({
-      cat: state.cat,
-      sortField: state.sortField,
-      sortDir: state.sortDir,
-      pageStart: state.lastDoc
-    });
-    const snap = await getDocs(q);
-    const docs = snap.docs;
-    if(docs.length===0){
-      if(first && $list.childElementCount===0){
-        $empty.hidden = false;
-      }
-      state.reachedEnd = true;
-      if($more) $more.disabled = true;
-      return;
-    }
-    state.lastDoc = docs[docs.length-1];
-
-    const batch = docs.map(d => ({ id: d.id, ...d.data() }));
-    state.items.push(...batch);
-
-    renderList(batch, /*append=*/true);
-    applyClientSearch(); // 키워드 즉시 반영
-
-    if($more) $more.disabled = !state.lastDoc;
-  }catch(err){
-    console.error('[list] 로드 오류:', err);
-    showIndexBanner(err);
-    alert('목록 불러오기 중 오류가 발생했습니다. 인덱스가 필요한 경우 콘솔 안내 링크로 생성해 주세요.');
-  }finally{
-    state.loading = false;
-
-    // 첫 로드시 스크롤 복원
-    if(!state.restoringScroll){
-      state.restoringScroll = true;
-      const y = loadScrollY();
-      if(y>0) setTimeout(()=> window.scrollTo(0,y), 0);
-    }
-  }
-}
-
-/* ===== 검색: 클라이언트 필터 ===== */
-function applyClientSearch(){
-  const q = (state.kw||'').trim().toLowerCase();
-  const nodes = Array.from($list.children);
-  if(!q){
-    nodes.forEach(n=> n.style.display='');
-    return;
-  }
-  nodes.forEach(n=>{
-    const title = $('.title', n)?.textContent?.toLowerCase()||'';
-    const url   = $('.url', n)?.textContent?.toLowerCase()||'';
-    n.style.display = (title.includes(q) || url.includes(q)) ? '' : 'none';
-  });
-}
-
 /* ===== 렌더 ===== */
-function renderList(items, append){
-  const frag = document.createDocumentFragment();
-  for(const v of items){
-    frag.appendChild(renderItem(v));
-  }
-  if(append) $list.appendChild(frag);
-  else { $list.innerHTML=''; $list.appendChild(frag); }
-}
+function renderItem(v, refs){
+  const { $catDialog, canEdit } = refs;
 
-function renderItem(v){
   const li = document.createElement('article');
   li.className = 'item';
 
@@ -435,7 +202,7 @@ function renderItem(v){
   cb.addEventListener('change', ()=>{
     if(cb.checked) state.selectedIds.add(v.id);
     else state.selectedIds.delete(v.id);
-    syncBulkButtons();
+    refs.syncBulkButtons();
   });
   colCheck.appendChild(cb);
 
@@ -467,7 +234,7 @@ function renderItem(v){
   if(v.createdAt?.toDate){
     meta.appendChild(textNode(fmtDateTime(v.createdAt.toDate())));
   }else{
-    meta.appendChild(textNode('-'));
+    meta.appendChild(textNode('-')); // ← 이전 오타 수정
   }
   if(v.seriesKey){
     const s = document.createElement('span');
@@ -520,7 +287,7 @@ function renderItem(v){
   btnCat.textContent = '카테고리';
   btnCat.addEventListener('click', (e)=>{
     e.stopPropagation();
-    openCategoryDialog([v.id], v.cats||[]);
+    refs.openCategoryDialog([v.id], v.cats||[]);
   });
 
   const btnDel = document.createElement('button');
@@ -528,10 +295,10 @@ function renderItem(v){
   btnDel.textContent = '삭제';
   btnDel.addEventListener('click', async (e)=>{
     e.stopPropagation();
-    await onBulkDelete([v.id]);
+    await refs.onBulkDelete([v.id]);
   });
 
-  if(!(canEdit(v))){ btnCat.disabled = true; btnDel.disabled = true; }
+  if(!refs.canEdit(v)){ btnCat.disabled = true; btnDel.disabled = true; }
 
   actions.appendChild(btnWatch);
   actions.appendChild(btnCat);
@@ -556,14 +323,28 @@ function renderItem(v){
 
   return li;
 }
+function renderList($list, items, append){
+  if(!$list) return;
+  const frag = document.createDocumentFragment();
+  for(const v of items){
+    frag.appendChild(renderItem(v, {
+      canEdit,
+      syncBulkButtons: ()=> syncBulkButtons($selCount,$bulkChangeBtn,$bulkDeleteBtn),
+      openCategoryDialog,
+      onBulkDelete
+    }));
+  }
+  if(append) $list.appendChild(frag);
+  else { $list.innerHTML=''; $list.appendChild(frag); }
+}
 
+/* ===== 권한 보조 ===== */
 function canEdit(v){
   if(!state.user) return false;
   if(state.isAdmin) return true;
   return v.ownerUid && v.ownerUid === state.user.uid;
 }
-
-function syncBulkButtons(){
+function syncBulkButtons($selCount, $bulkChangeBtn, $bulkDeleteBtn){
   const count = state.selectedIds.size;
   if($selCount) $selCount.textContent = `선택 ${count}`;
   const can = count>0;
@@ -576,13 +357,11 @@ function syncBulkButtons(){
 }
 
 /* ===== 카테고리 다이얼로그 ===== */
+let $catDialog, $catDialogBody, $catSaveBtn;
 function openCategoryDialog(targetIds, currentCats=[]){
-  if(!$catDialog) return;
+  if(!$catDialog || !$catDialogBody) return;
   $catDialog.dataset.target = JSON.stringify(targetIds);
-  renderCatDialogOptions(currentCats);
-  $catDialog.showModal();
-}
-function renderCatDialogOptions(selectedCats){
+  // 옵션 렌더
   $catDialogBody.innerHTML = '';
   for(const [, group] of Object.entries(CATEGORIES)){
     const h = document.createElement('div');
@@ -598,7 +377,7 @@ function renderCatDialogOptions(selectedCats){
       chk.type = 'checkbox';
       chk.id = id;
       chk.value = item.value;
-      chk.checked = selectedCats.includes(item.value);
+      chk.checked = currentCats.includes(item.value);
       const span = document.createElement('span');
       span.textContent = item.label || item.value;
       row.appendChild(chk);
@@ -606,8 +385,10 @@ function renderCatDialogOptions(selectedCats){
       $catDialogBody.appendChild(row);
     }
   }
+  $catDialog.showModal();
 }
 async function saveCategoryDialog(){
+  if(!$catDialog || !$catDialogBody) return;
   const targetIds = JSON.parse($catDialog.dataset.target||'[]');
   const checks = Array.from($catDialogBody.querySelectorAll('input[type=checkbox]'));
   const newCats = checks.filter(ch=> ch.checked).map(ch=> ch.value);
@@ -624,16 +405,20 @@ async function saveCategoryDialog(){
     for(const v of state.items){
       if(editableIds.includes(v.id)) v.cats = newCats.slice();
     }
-    renderList(state.items, /*append=*/false);
+    const $list = $('#list');
+    renderList($list, state.items, /*append=*/false);
     applyClientSearch();
   }catch(err){
     console.error('[list] 카테고리 변경 오류:', err);
     alert('카테고리 변경 중 오류가 발생했습니다.');
   }
 }
-
-/* ===== 삭제 ===== */
 async function onBulkDelete(ids){
+  const $list = $('#list');
+  const $selCount = $('#selCount');
+  const $bulkChangeBtn = $('#bulkChangeBtn');
+  const $bulkDeleteBtn = $('#bulkDeleteBtn');
+
   const dels = ids.filter(id=>{
     const v = state.items.find(x=> x.id===id);
     return v && canEdit(v);
@@ -645,8 +430,8 @@ async function onBulkDelete(ids){
     await Promise.all(dels.map(id=> deleteDoc(doc(db,'videos',id))));
     state.items = state.items.filter(v=> !dels.includes(v.id));
     dels.forEach(id=> state.selectedIds.delete(id));
-    syncBulkButtons();
-    renderList(state.items, /*append=*/false);
+    syncBulkButtons($selCount, $bulkChangeBtn, $bulkDeleteBtn);
+    renderList($list, state.items, /*append=*/false);
     applyClientSearch();
   }catch(err){
     console.error('[list] 삭제 오류:', err);
@@ -654,57 +439,270 @@ async function onBulkDelete(ids){
   }
 }
 
-/* ===== 유틸 ===== */
-function labelFromCat(value){
-  for(const [, group] of Object.entries(CATEGORIES)){
-    for(const item of (group.items||[])){
-      if(item.value===value) return item.label || value;
+/* ===== 검색: 클라이언트 필터 ===== */
+function applyClientSearch(){
+  const $list = $('#list');
+  if(!$list) return;
+  const q = (state.kw||'').trim().toLowerCase();
+  const nodes = Array.from($list.children);
+  if(!q){
+    nodes.forEach(n=> n.style.display='');
+    return;
+  }
+  nodes.forEach(n=>{
+    const title = $('.title', n)?.textContent?.toLowerCase()||'';
+    const url   = $('.url', n)?.textContent?.toLowerCase()||'';
+    n.style.display = (title.includes(q) || url.includes(q)) ? '' : 'none';
+  });
+}
+
+/* ===== 로드/페이징 ===== */
+async function resetAndLoad(){
+  const $list   = $('#list');
+  const $empty  = $('#empty');
+  const $more   = $('#moreBtn');
+  const $banner = $('#errorBanner');
+
+  if(state.loading) return;
+  state.items = [];
+  state.lastDoc = null;
+  state.reachedEnd = false;
+  state.selectedIds.clear();
+  syncBulkButtons($('#selCount'), $('#bulkChangeBtn'), $('#bulkDeleteBtn'));
+
+  if($list) $list.innerHTML = '';
+  if($empty) $empty.hidden = true;
+  if($more) $more.disabled = true;
+  if($banner) $banner.style.display = 'none';
+
+  await loadMore(true);
+}
+async function loadMore(first=false){
+  const $list   = $('#list');
+  const $empty  = $('#empty');
+  const $more   = $('#moreBtn');
+  const $banner = $('#errorBanner');
+
+  if(state.loading || state.reachedEnd) return;
+  state.loading = true;
+
+  try{
+    const q = buildQuery({
+      cat: state.cat,
+      sortField: state.sortField,
+      sortDir: state.sortDir,
+      pageStart: state.lastDoc
+    });
+    const snap = await getDocs(q);
+    const docs = snap.docs;
+    if(docs.length===0){
+      if(first && $list && $list.childElementCount===0){
+        if($empty) $empty.hidden = false;
+      }
+      state.reachedEnd = true;
+      if($more) $more.disabled = true;
+      return;
+    }
+    state.lastDoc = docs[docs.length-1];
+
+    const batch = docs.map(d => ({ id: d.id, ...d.data() }));
+    state.items.push(...batch);
+
+    renderList($list, batch, /*append=*/true);
+    applyClientSearch();
+
+    if($more) $more.disabled = !state.lastDoc;
+  }catch(err){
+    console.error('[list] 로드 오류:', err);
+    showIndexBanner($banner, err);
+    alert('목록 불러오기 중 오류가 발생했습니다. 인덱스가 필요한 경우 콘솔 안내 링크로 생성해 주세요.');
+  }finally{
+    state.loading = false;
+
+    // 첫 로드시 스크롤 복원
+    if(!state.restoringScroll){
+      state.restoringScroll = true;
+      const y = loadScrollY();
+      if(y>0) setTimeout(()=> window.scrollTo(0,y), 0);
     }
   }
-  return value;
-}
-function fmtDateTime(d){
-  const y = d.getFullYear();
-  const m = String(d.getMonth()+1).padStart(2,'0');
-  const day = String(d.getDate()).padStart(2,'0');
-  const hh = String(d.getHours()).padStart(2,'0');
-  const mm = String(d.getMinutes()).padStart(2,'0');
-  return `${y}-${m}-${day} ${hh}:${mm}`;
-}
-function extractYouTubeId(url){
-  try{
-    if(!url) return '';
-    const u = new URL(url);
-    if(u.hostname==='youtu.be'){
-      return u.pathname.slice(1);
-    }
-    if(u.hostname.includes('youtube.com')){
-      if(u.searchParams.get('v')) return u.searchParams.get('v');
-      const m = u.pathname.match(/\/(live|shorts|embed)\/([^/?#]+)/);
-      if(m) return m[2];
-    }
-  }catch{}
-  return '';
-}
-function guessThumb(url){
-  const vid = extractYouTubeId(url);
-  return vid ? `https://i.ytimg.com/vi/${vid}/hqdefault.jpg` : './image/copytube_logo_512.png';
 }
 
-/* ===== 초기 로드 ===== */
-(async function init(){
-  if(state.cat) $catSelect.value = state.cat;
-  if(state.kw)  $keyword.value   = state.kw;
+/* ===== 초기화 ===== */
+function init(){
+  // 요소 캐시
+  const $catSelect         = $('#catSelect');
+  const $sortSelect        = $('#sortSelect');
+  const $keyword           = $('#keyword');
+  const $refresh           = $('#refreshBtn');
+  const $more              = $('#moreBtn');
+  const $dirToggleBtn      = $('#dirToggleBtn');
+  const $seriesSortFields  = $('#seriesSortFields');
+  const $selCount          = $('#selCount');
+  const $bulkChangeBtn     = $('#bulkChangeBtn');
+  const $bulkDeleteBtn     = $('#bulkDeleteBtn');
+  const $sentinel          = $('#sentinel');
+
+  $catDialog      = $('#catDialog');
+  $catDialogBody  = $('#catDialogBody');
+  $catSaveBtn     = $('#catSaveBtn');
+
+  const $seriesFieldRadios = $seriesSortFields
+    ? Array.from($seriesSortFields.querySelectorAll('input[name="sortField"]'))
+    : [];
+
+  // 권한
+  onAuthStateChanged(auth, async (user)=>{
+    state.user = user || null;
+    state.isAdmin = await isAdmin(user?.uid);
+    syncBulkButtons($selCount, $bulkChangeBtn, $bulkDeleteBtn);
+  });
+
+  // 카테고리 셀렉트 채우기 (널가드)
+  (function initCategoriesSelect(){
+    if(!$catSelect) return;
+    // 기본 옵션은 HTML에 이미 존재(전체 카테고리) → optgroup만 붙임
+    Object.entries(CATEGORIES).forEach(([groupKey, group])=>{
+      const og = document.createElement('optgroup');
+      og.label = group.label ?? groupKey;
+      (group.items||[]).forEach(cat=>{
+        const opt = document.createElement('option');
+        opt.value = cat.value;
+        opt.textContent = cat.label || cat.value;
+        og.appendChild(opt);
+      });
+      $catSelect.appendChild(og);
+    });
+  })();
+
+  // 로컬설정 로드 + 초기 UI 반영
+  loadPrefs();
+  if($catSelect && state.cat) $catSelect.value = state.cat;
+  if($keyword && state.kw)   $keyword.value   = state.kw;
 
   if($seriesSortFields) $seriesSortFields.style.display = isSeriesCategory(state.cat) ? '' : 'none';
+  updateDirToggleLabel($dirToggleBtn, state.sortField, state.sortDir);
 
-  await resetAndLoad();
+  // 이벤트 바인딩
+  if($refresh) $refresh.addEventListener('click', ()=> resetAndLoad());
+  if($more) $more.addEventListener('click', ()=> loadMore());
 
+  if($keyword){
+    $keyword.addEventListener('input', ()=>{
+      state.kw = ($keyword.value||'').trim().toLowerCase();
+      savePrefs();
+      applyClientSearch(); // 서버 재쿼리 없이 즉시 필터
+    });
+  }
+
+  if($sortSelect){
+    $sortSelect.addEventListener('change', ()=>{
+      const [field, dir] = ($sortSelect.value || 'createdAt_desc').split('_');
+      state.sortField = field;
+      state.sortDir   = (dir==='asc'?'asc':'desc');
+      updateDirToggleLabel($dirToggleBtn, state.sortField, state.sortDir);
+      savePrefs();
+      resetAndLoad();
+    });
+  }
+
+  if($catSelect){
+    $catSelect.addEventListener('change', ()=>{
+      state.cat = $catSelect.value || '';
+      savePrefs();
+
+      const series = isSeriesCategory(state.cat);
+      if($seriesSortFields) $seriesSortFields.style.display = series ? '' : 'none';
+
+      if(series){
+        state.sortField = 'createdAt';
+        state.sortDir   = 'asc';   // 시리즈 기본: 등록순
+        if($seriesFieldRadios.length){
+          const r = $seriesFieldRadios.find(x=> x.value==='createdAt');
+          if(r) r.checked = true;
+        }
+      }else{
+        state.sortField = 'createdAt';
+        state.sortDir   = 'desc';  // 일반 기본: 최신순
+        if($seriesFieldRadios.length){
+          const r = $seriesFieldRadios.find(x=> x.checked);
+          if(r) r.checked = false;
+        }
+      }
+      updateDirToggleLabel($dirToggleBtn, state.sortField, state.sortDir);
+      resetAndLoad();
+    });
+  }
+
+  if($seriesFieldRadios.length){
+    $seriesFieldRadios.forEach(r=>{
+      r.addEventListener('change', ()=>{
+        state.sortField = r.value; // createdAt | seriesSortAt | title
+        if(state.sortField==='createdAt')         state.sortDir='asc';  // 등록순 기본
+        else if(state.sortField==='seriesSortAt') state.sortDir='desc'; // 최신화 기본
+        else if(state.sortField==='title')        state.sortDir='asc';  // 가나다 기본
+        updateDirToggleLabel($dirToggleBtn, state.sortField, state.sortDir);
+        savePrefs();
+        resetAndLoad();
+      });
+    });
+  }
+
+  if($dirToggleBtn){
+    $dirToggleBtn.addEventListener('click', ()=>{
+      state.sortDir = (state.sortDir==='asc'?'desc':'asc');
+      updateDirToggleLabel($dirToggleBtn, state.sortField, state.sortDir);
+      savePrefs();
+      resetAndLoad();
+    });
+  }
+
+  // 일괄 액션
+  const $bulkChangeBtn = $('#bulkChangeBtn');
+  const $bulkDeleteBtn = $('#bulkDeleteBtn');
+  if($bulkChangeBtn) $bulkChangeBtn.addEventListener('click', ()=>{
+    if(state.selectedIds.size===0) return;
+    openCategoryDialog([...state.selectedIds]);
+  });
+  if($bulkDeleteBtn) $bulkDeleteBtn.addEventListener('click', ()=>{
+    if(state.selectedIds.size===0) return;
+    onBulkDelete([...state.selectedIds]);
+  });
+  if($catSaveBtn){
+    $catSaveBtn.addEventListener('click', async (e)=>{
+      e.preventDefault();
+      await saveCategoryDialog();
+    });
+  }
+
+  // 무한 스크롤
+  if('IntersectionObserver' in window && $sentinel){
+    state.io = new IntersectionObserver((entries)=>{
+      for(const e of entries){
+        if(e.isIntersecting && !state.loading && !state.reachedEnd){
+          loadMore();
+        }
+      }
+    }, { rootMargin: '200px' });
+    state.io.observe($sentinel);
+  }
+
+  // 초기 로드
+  resetAndLoad();
+
+  // 스크롤 저장
   window.addEventListener('beforeunload', saveScrollY);
-  window.addEventListener('scroll', ()=> {
+  window.addEventListener('scroll', ()=>{
     if(!state._scrollTick){
       state._scrollTick = true;
       requestAnimationFrame(()=> { saveScrollY(); state._scrollTick = false; });
     }
   });
-})();
+}
+
+/* ===== 부트스트랩: DOMContentLoaded 보장 ===== */
+if (document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', init, { once:true });
+} else {
+  init();
+}
