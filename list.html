@@ -1,4 +1,3 @@
-<!-- list.html (KidsAni v0.3.3) -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -10,7 +9,7 @@
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     connect-src 'self' https://www.googleapis.com https://firestore.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseinstallations.googleapis.com https://www.gstatic.com https://www.youtube.com;
-    img-src 'self' data: https://i.ytimg.com;
+    img-src 'self' data: https://i.ytimg.com https://img.youtube.com;
     frame-src https://www.youtube.com;
     script-src 'self' https://www.gstatic.com 'unsafe-inline';
     style-src 'self' 'unsafe-inline';
@@ -19,90 +18,134 @@
   ">
 
   <link rel="stylesheet" href="css/style.css"/>
-
-  <!-- 페이지 전용 최소 스타일 -->
   <style>
-    body{ padding-top:48px; }
-    main{ max-width:1100px; margin:0 auto; padding:0 16px 40px; }
+    .page { max-width: 1080px; margin: 0 auto; padding: 8px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .grow { flex: 1; }
+    .pill { border:1px solid var(--border,#333); border-radius:999px; padding:6px 10px; background:var(--bg-3,#1b1b1b); color:var(--fg,#fff); }
+    .btn { border:1px solid var(--border,#333); background:#000; color:#fff; border-radius:10px; padding:6px 10px; cursor:pointer; }
+    .btn:disabled { opacity:.6; cursor:not-allowed; }
+    .btn-ghost { background:transparent; }
+    .list-head { display:flex; align-items:center; justify-content:space-between; margin:8px 0 4px; }
+    .list-head .title { font-weight:700; }
+    .toolbar { display:grid; grid-template-columns: 1fr auto auto; gap:8px; align-items:center; margin:8px 0; }
+    .item { display:grid; grid-template-columns:32px 1fr 220px; gap:10px; border:1px solid var(--border,#333); border-radius:12px; padding:10px; background:var(--bg-2,#111); margin:6px 0; }
+    .col-check { display:flex; align-items:flex-start; padding-top:4px; }
+    .col-main .title { font-weight:700; font-size:16px; line-height:1.3; }
+    .col-main .url { font-size:12px; opacity:.8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .chips { display:flex; flex-wrap:wrap; gap:6px; margin:3px 0; }
+    .chip { border:1px solid var(--border,#333); border-radius:999px; padding:2px 8px; font-size:12px; opacity:.9; }
+    .meta { display:flex; gap:8px; align-items:center; font-size:12px; opacity:.85; }
+    .series-badge,.episode-badge { border:1px solid var(--border,#333); border-radius:999px; padding:1px 6px; }
+    .col-side { display:grid; grid-template-rows:auto auto; gap:8px; align-items:center; justify-items:end; }
+    .thumb { width:200px; aspect-ratio:16/9; object-fit:cover; border-radius:10px; border:1px solid var(--border,#333); }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; }
+    #empty { text-align:center; opacity:.7; padding:24px 8px; }
+    .banner { background:#2b2b2b; color:#fff; border:1px solid #444; border-radius:8px; padding:8px 10px; margin:8px 0; }
+    .banner a { color:#9fd1ff; text-decoration:underline; }
 
-    .toolbar{ display:grid; grid-template-columns: 1fr auto auto; gap:8px; align-items:center; }
-    .s_bar{ display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; margin:10px 0; }
-    .search{ display:flex; gap:8px; align-items:center; border:1px solid var(--border); background:#0f0f0f; border-radius:10px; padding:8px 10px; }
-    .search input{ flex:1; min-width:140px; border:0; outline:0; background:transparent; color:#fff; }
-    .btn{ padding:8px 10px; border-radius:10px; border:1px solid #2a2a2a; background:#151515; color:#fff; cursor:pointer; }
-    .btn:hover{ background:#1a1a1a; }
+    .bulk-row { display:flex; gap:8px; align-items:center; justify-content:flex-end; margin:6px 0; }
+    .muted { opacity:.75; font-size:12px; }
 
-    .cards{ display:flex; flex-direction:column; gap:7px; margin-top:10px; }
-
-    /* 카드(목록1.3 변형: 좌 텍스트, 우 썸네일) */
-    .card{ display:grid; grid-template-columns: 1fr 160px; gap:10px; border:1px solid var(--border,#2a2a2a); border-radius:12px; background:#0f0f0f; padding:10px; }
-    .card .left{ display:flex; flex-direction:column; gap:6px; cursor:pointer; }
-    .card .title{ font-weight:800; font-size:16px; line-height:1.2; color:#eaeaea; word-break:break-word; }
-    .card .chips{ display:flex; flex-wrap:wrap; gap:6px; }
-    .chip{ display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; font-size:12px; color:#ddd; background:#151515; border:1px solid #2a2a2a; }
-    .card .meta{ font-size:14px; color:#b8b8b8; }
-
-    .right{ display:flex; align-items:center; justify-content:center; }
-    .thumb-wrap{ width:100%; aspect-ratio:16/9; overflow:hidden; border-radius:10px; background:#111; }
-    .thumb{ width:100%; height:100%; object-fit:cover; cursor:pointer; }
-
-    .slide-in-right{ animation: sir .24s ease-out both; }
-    @keyframes sir{ from{ transform:translateX(16px); opacity:0; } to{ transform:none; opacity:1; } }
-
-    .msg{ margin:8px 0; font-size:13px; color:#ccc; min-height:1.2em; }
-
-    @media (max-width:480px){
-      .card{ grid-template-columns: 1fr 132px; }
+    @media(max-width:720px){
+      .item { grid-template-columns: 32px 1fr; }
+      .col-side { justify-items:stretch; }
+      .thumb { width:100%; }
+      .actions .btn { flex:1; }
     }
+
+    /* dialog */
+    dialog::backdrop { background: rgba(0,0,0,.5); }
+    dialog { border:1px solid var(--border,#333); border-radius:12px; padding:10px; background:var(--bg-2,#111); color:var(--fg,#fff); }
   </style>
 </head>
 <body>
-  <!-- 상단바 -->
-  <header id="topbar">
-    <div class="brand">
-      <a href="./" aria-label="KidsAni 홈으로">
-        <img class="brand-logo" src="image/kidsani_r_side.png" alt="KidsAni"/>
-      </a>
-    </div>
-    <div class="right" style="position:relative;">
-      <a id="signupLink" class="link" href="signup.html">Sign up</a>
-      <a id="signinLink" class="link" href="signin.html">Sign in</a>
-      <span id="welcome" class="welcome"></span>
-      <button id="menuBtn" class="icon" aria-label="menu">三</button>
-      <div id="dropdownMenu" class="dropdown hidden" role="menu" aria-hidden="true">
-        <button id="btnAbout" class="menu-strong" type="button">KidsAni는…</button>
-        <button id="btnNick" type="button">닉네임 변경</button>
-        <button id="btnMyUploads" type="button">내영상관리</button>
-        <button id="btnSignOut" type="button">Sign out</button>
-        <button id="btnList" type="button">영상목록</button>
-        <button id="btnGoUpload" class="menu-strong" type="button">추천영상등록</button>
-      </div>
-    </div>
+  <!-- 상단바: 원본 유지 -->
+  <header class="site-header">
+    <img class="brand-logo" src="image/copytube_logo_side.png" alt="KidsAni">
+    <div style="flex:1"></div>
+    <nav class="top-nav">
+      <a class="btn" href="index.html">카테고리</a>
+      <a class="btn" href="watch.html">영상보기</a>
+      <a class="btn" href="upload.html">등록</a>
+      <a class="btn" href="manage-uploads.html">내영상관리</a>
+    </nav>
   </header>
 
-  <main>
-    <h2>영상 목록</h2>
+  <main class="page">
+    <!-- 인덱스 에러 안내 배너 -->
+    <div id="errorBanner" class="banner" style="display:none"></div>
 
-    <div class="s_bar">
-      <div class="search">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M21 21l-4.35-4.35M16 10.5A5.5 5.5 0 1 1 5 10.5a5.5 5.5 0 0 1 11 0Z"
-                stroke="#9aa0a6" stroke-width="2" stroke-linecap="round"/>
-        </svg>
-        <input id="q" type="search" placeholder="제목·닉네임·URL 검색"/>
+    <!-- 상단 제목행 + 정렬 방향 토글 -->
+    <div class="list-head">
+      <div class="title">영상목록 — 제목</div>
+      <button id="dirToggleBtn" class="btn" title="정렬 방향 토글(기본/거꾸로)">최신순</button>
+    </div>
+
+    <!-- 툴바 -->
+    <div class="toolbar">
+      <div class="row">
+        <select id="catSelect" class="pill">
+          <option value="">전체 카테고리</option>
+          <!-- categories.js에서 채움 -->
+        </select>
+        <input id="keyword" class="pill" type="search" placeholder="제목 검색"/>
       </div>
-      <button id="btnSearch" class="btn">검색</button>
+
+      <!-- 시리즈 카테고리에서만 노출되는 정렬필드 3종 -->
+      <div id="seriesSortFields" class="pill" style="display:none">
+        <label><input type="radio" name="sortField" value="createdAt" checked> 등록순</label>
+        <label><input type="radio" name="sortField" value="seriesSortAt"> 유튜브업로드순</label>
+        <label><input type="radio" name="sortField" value="title"> 가나다</label>
+      </div>
+
+      <div class="row">
+        <button id="refreshBtn" class="btn">새로고침</button>
+        <button id="moreBtn" class="btn">더 보기</button>
+      </div>
     </div>
 
-    <div id="msg" class="msg">불러오는 중…</div>
-
-    <div id="cards" class="cards slide-in-right" aria-live="polite"></div>
-    <div id="more" style="text-align:center; margin:12px 0; display:none;">
-      <button id="btnMore" class="btn">더 보기</button>
+    <!-- 일괄 액션 -->
+    <div class="bulk-row">
+      <span id="selCount" class="muted">선택 0</span>
+      <button id="bulkChangeBtn" class="btn">선택 카테고리</button>
+      <button id="bulkDeleteBtn" class="btn">선택 삭제</button>
     </div>
+
+    <!-- (기존 select 정렬 호환: 없으면 JS에서 무시) -->
+    <select id="sortSelect" hidden>
+      <option value="createdAt_desc" selected>최신순</option>
+      <option value="createdAt_asc">등록순</option>
+      <option value="title_asc">가나다</option>
+      <option value="seriesSortAt_desc">유튜브업로드순</option>
+    </select>
+
+    <section id="list"></section>
+    <div id="empty" hidden>결과가 없습니다.</div>
+
+    <!-- 무한 스크롤 sentinel -->
+    <div id="sentinel" style="height:1px;"></div>
   </main>
 
-  <!-- 단일 모듈만 로드 (list.js가 나머지 import) -->
-  <script type="module" src="js/list.js?v=2.2.0"></script>
+  <!-- 카테고리 변경 모달 -->
+  <dialog id="catDialog">
+    <form method="dialog" id="catForm" style="min-width:280px; max-width:80vw;">
+      <h3 style="margin:0 0 8px 0;">카테고리 변경</h3>
+      <div id="catDialogBody" style="max-height:45vh; overflow:auto; padding-right:4px;"></div>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px;">
+        <button value="cancel" class="btn">취소</button>
+        <button id="catSaveBtn" value="default" class="btn">저장</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Firebase & App -->
+  <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js" type="module"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js" type="module"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js" type="module"></script>
+
+  <script type="module" src="js/firebase-init.js"></script>
+  <script type="module" src="js/categories.js"></script>
+  <script type="module" src="js/list.js"></script>
 </body>
 </html>
