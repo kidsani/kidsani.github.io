@@ -1,15 +1,20 @@
 // js/index.js (v1.9.0) — KidsAni
-// - 시리즈 정렬 칩을 등록순/최신순/가나다순(제목) 3단 토글로 확장
+// - 시리즈 정렬 칩을 등록순/유튜브/가나다 3단 토글로 확장
 // - 저장 키(seriesSortPrefs)는 그대로, 값만 "registered" | "latest" | "title" 지원
-// - 기존 기능(연속재생, 드롭다운, 스와이프, 개인자료 단독선택, 그룹 인디eterminate 등) 유지
+// - 기본 방향(리스트에서 해석):
+//     registered -> createdAt desc (최신순 디폴트)
+//     latest     -> seriesSortAt asc (유튜브 업로드 과거순 디폴트)
+//     title      -> title asc (가나다 디폴트)
+// - 기존 기능(연속재생, 드롭다운, 스와이프, 개인자료 단독선택, 그룹 indeterminate 등) 유지
 
 import { CATEGORY_GROUPS } from './categories.js';
 import { auth } from './firebase-init.js';
 import { onAuthStateChanged, signOut as fbSignOut } from './auth.js';
 
+/* ---------- consts ---------- */
 const GROUP_ORDER_KEY = 'groupOrderV1';
 const SERIES_SORT_PREFS_KEY = 'seriesSortPrefs'; // { [categoryValue]: "registered" | "latest" | "title" }
-const SERIES_MODES = ['registered','latest','title'];
+const SERIES_MODES = ['registered','latest','title']; // 순환 순서
 const isPersonalVal = (v)=> v==='personal1' || v==='personal2';
 
 /* ---------- series sort prefs (3-state) ---------- */
@@ -37,7 +42,7 @@ function cycleSeriesMode(prefs, catValue){
 }
 function modeLabel(m){
   switch(normalizeMode(m)){
-    case 'latest': return '최신순';
+    case 'latest': return '유튜브';
     case 'title' : return '가나다';
     case 'registered':
     default:       return '등록순';
@@ -45,10 +50,10 @@ function modeLabel(m){
 }
 function modeAria(m){
   switch(normalizeMode(m)){
-    case 'latest': return '시리즈 정렬: 최신순';
+    case 'latest': return '시리즈 정렬: 유튜브 업로드순(과거→최신)';
     case 'title' : return '시리즈 정렬: 가나다순';
     case 'registered':
-    default:       return '시리즈 정렬: 등록순';
+    default:       return '시리즈 정렬: 등록순(최신→오래)';
   }
 }
 
@@ -101,7 +106,7 @@ btnGoUpload  ?.addEventListener("click", ()=>{ location.href = "upload.html"; cl
 btnAbout     ?.addEventListener("click", ()=>{ location.href = "about.html"; closeDropdown(); });
 btnNick      ?.addEventListener("click", ()=>{ location.href = "nick.html"; closeDropdown(); });
 btnSignOut   ?.addEventListener("click", async ()=>{ if(!auth.currentUser){ location.href='signin.html'; return; } await fbSignOut(auth); closeDropdown(); });
-btnList      ?.addEventListener("click", ()=>{ location.href = "list.html"; closeDropdown(); });
+btnList      ?.addEventListener("click", ()=>{ persistSelectedCatsForList(); location.href = "list.html"; closeDropdown(); });
 brandHome    ?.addEventListener("click",(e)=>{ e.preventDefault(); window.scrollTo({top:0,behavior:"smooth"}); });
 
 /* === 연속재생(autonext) 표준 관리: index 전용 === */
@@ -139,10 +144,10 @@ function renderGroups(){
       const labelText = isPersonalGroup && personalLabels[c.value] ? personalLabels[c.value] : c.label;
       const value = c.value;
 
-      // 시리즈 그룹일 때만 단일 칩 토글(등록순/최신순/가나다)
+      // 시리즈 그룹일 때만 단일 칩 토글(등록순 → 유튜브 → 가나다)
       const mode = getSeriesMode(seriesPrefs, value);
       const chip = isSeries
-        ? `<button type="button" class="chip-toggle" data-series-value="${value}" aria-label="${modeAria(mode)}" title="정렬 전환: 등록순 → 최신순 → 가나다">${modeLabel(mode)}</button>`
+        ? `<button type="button" class="chip-toggle" data-series-value="${value}" aria-label="${modeAria(mode)}" title="정렬 전환: 등록순 → 유튜브 → 가나다">${modeLabel(mode)}</button>`
         : '';
 
       return `
@@ -190,10 +195,10 @@ function renderGroups(){
       e.stopPropagation();
       const value = chip.getAttribute('data-series-value');
       const prefs = loadSeriesPrefs();
-      const next = cycleSeriesMode(prefs, value);
+      const next = cycleSeriesMode(prefs, value); // registered -> latest -> title
       chip.textContent = modeLabel(next);
       chip.setAttribute('aria-label', modeAria(next));
-      chip.setAttribute('title', '정렬 전환: 등록순 → 최신순 → 가나다');
+      chip.setAttribute('title', '정렬 전환: 등록순 → 유튜브 → 가나다');
     });
   });
 
@@ -312,6 +317,7 @@ btnWatch?.addEventListener('click', ()=>{
   const personals = selected.filter(isPersonalVal);
   const normals   = selected.filter(v=> !isPersonalVal(v));
 
+  // 시리즈 단독
   if (personals.length === 1 && normals.length === 0){
     localStorage.setItem('selectedCats', JSON.stringify(personals));
     localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
@@ -319,6 +325,7 @@ btnWatch?.addEventListener('click', ()=>{
     return;
   }
 
+  // 일반
   const isAll = computeAllSelected();
   const valueToSave = (normals.length===0 || isAll) ? "ALL" : normals;
   localStorage.setItem('selectedCats', JSON.stringify(valueToSave));
