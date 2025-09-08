@@ -1,11 +1,28 @@
-// js/list.js — 완전판
+// js/list.js — 완전판 (CATEGORY_GROUPS → CATEGORIES 어댑터 포함)
+// 기능: 권한/일괄액션(선택 삭제·카테고리), 시리즈 정렬(등록/유튜브/가나다 + 방향토글),
+// 무한 스크롤(+더보기 폴백), 클라 검색, 상태 복원(localStorage), 인덱스 에러 배너,
+// 썸네일/링크 보강, 기존 sortSelect 호환
+
 import { auth, db } from './firebase-init.js';
 import {
   collection, query, where, orderBy, limit, startAfter, getDocs,
   doc, getDoc, updateDoc, deleteDoc
 } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js';
 import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js';
-import { CATEGORIES_GROUPS } from './categories.js';
+import { CATEGORY_GROUPS } from './categories.js';
+
+/* =========[ 어댑터 ]=========
+ * 기존 코드가 기대하는 CATEGORIES 형태로 변환:
+ * { [groupKey]: { label, items:[{value,label}], series?:boolean } }
+ */
+const CATEGORIES = CATEGORY_GROUPS.reduce((acc, g) => {
+  acc[g.key] = {
+    label: g.label,
+    items: (g.children || []).map(c => ({ value: c.value, label: c.label })),
+    series: !!g.series
+  };
+  return acc;
+}, {});
 
 /**
  * videos 문서 필드(가정):
@@ -30,7 +47,7 @@ import { CATEGORIES_GROUPS } from './categories.js';
  */
 
 const $catSelect   = document.getElementById('catSelect');
-const $sortSelect  = document.getElementById('sortSelect');  // 호환용(숨김)
+const $sortSelect  = document.getElementById('sortSelect');  // 호환용(숨김일 수 있음)
 const $keyword     = document.getElementById('keyword');
 const $refresh     = document.getElementById('refreshBtn');
 const $more        = document.getElementById('moreBtn');
@@ -38,8 +55,8 @@ const $list        = document.getElementById('list');
 const $empty       = document.getElementById('empty');
 const $banner      = document.getElementById('errorBanner');
 
-const $dirToggleBtn      = document.getElementById('dirToggleBtn');
-const $seriesSortFields  = document.getElementById('seriesSortFields');
+const $dirToggleBtn      = document.getElementById('dirToggleBtn');      // 방향 토글
+const $seriesSortFields  = document.getElementById('seriesSortFields');  // 시리즈 정렬 라디오 컨테이너
 const $seriesFieldRadios = $seriesSortFields
   ? Array.from($seriesSortFields.querySelectorAll('input[name="sortField"]'))
   : [];
@@ -79,11 +96,8 @@ let state = {
 
   selectedIds: new Set(),
 
-  // infinite scroll
-  io: null,
-
-  // restore scroll
-  restoringScroll: false,
+  io: null,               // IntersectionObserver
+  restoringScroll: false, // 최초 스크롤 복원
 };
 
 function $(sel, root=document){ return root.querySelector(sel); }
@@ -94,7 +108,6 @@ function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 onAuthStateChanged(auth, async (user)=>{
   state.user = user || null;
   state.isAdmin = await isAdmin(user?.uid);
-  // 권한은 버튼 활성/비활성에 반영
   syncBulkButtons();
 });
 async function isAdmin(uid){
@@ -105,11 +118,11 @@ async function isAdmin(uid){
   }catch{ return false; }
 }
 
-/* ===== 카테고리 셀렉트 초기화 (CATEGORIES: { groupKey: { label, items:[{value,label},...] } }) ===== */
+/* ===== 카테고리 셀렉트 초기화 ===== */
 (function initCategoriesSelect(){
-  Object.entries(CATEGORIES).forEach(([_, group])=>{
+  Object.entries(CATEGORIES).forEach(([groupKey, group])=>{
     const og = document.createElement('optgroup');
-    og.label = group.label ?? '';
+    og.label = group.label ?? groupKey;
     (group.items||[]).forEach(cat=>{
       const opt = document.createElement('option');
       opt.value = cat.value;
@@ -123,8 +136,8 @@ async function isAdmin(uid){
 /* ===== 시리즈 그룹 판정 ===== */
 function isSeriesCategory(catValue){
   if(!catValue) return false;
-  for(const [, group] of Object.entries(CATEGORIES)){
-    const isSeriesGroup = (group.label||'').includes('시리즈');
+  for (const [, group] of Object.entries(CATEGORIES)){
+    const isSeriesGroup = !!group.series || (group.label || '').includes('시리즈');
     if(!isSeriesGroup) continue;
     if((group.items||[]).some(it=> it.value === catValue)) return true;
   }
@@ -145,7 +158,7 @@ function updateDirToggleLabel(field, dir){
   }
 }
 
-/* ===== 정렬 스펙 (라디오/토글 우선) ===== */
+/* ===== 정렬 스펙 (라디오/토글 우선, 그 외엔 기존 select) ===== */
 function getSortSpec(){
   const seriesUIVisible = $seriesSortFields && $seriesSortFields.style.display !== 'none';
   if(seriesUIVisible && $seriesFieldRadios.length){
@@ -154,7 +167,6 @@ function getSortSpec(){
     updateDirToggleLabel(field, state.sortDir);
     return { field, dir: state.sortDir };
   }
-  // 호환: 기존 select
   const raw = ($sortSelect && $sortSelect.value) ? $sortSelect.value : 'createdAt_desc';
   const [field, dir] = raw.split('_');
   return { field, dir: (dir==='asc'?'asc':'desc') };
@@ -181,9 +193,7 @@ function loadPrefs(){
     if(kw) state.kw = kw;
   }catch{}
 }
-function saveScrollY(){
-  try{ localStorage.setItem(LS_KEY.SCROLL, String(window.scrollY||0)); }catch{}
-}
+function saveScrollY(){ try{ localStorage.setItem(LS_KEY.SCROLL, String(window.scrollY||0)); }catch{} }
 function loadScrollY(){
   try{
     const y = parseInt(localStorage.getItem(LS_KEY.SCROLL)||'0',10);
@@ -199,8 +209,7 @@ if($keyword){
   $keyword.addEventListener('input', ()=>{
     state.kw = ($keyword.value||'').trim().toLowerCase();
     savePrefs();
-    // 서버 재쿼리 없이 클라 필터
-    applyClientSearch();
+    applyClientSearch(); // 서버 재쿼리 없이 즉시 필터
   });
 }
 
@@ -225,14 +234,14 @@ if($catSelect){
 
     if(series){
       state.sortField = 'createdAt';
-      state.sortDir   = 'asc';
+      state.sortDir   = 'asc';   // 시리즈 기본: 등록순(오래→최신)
       if($seriesFieldRadios.length){
         const r = $seriesFieldRadios.find(x=> x.value==='createdAt');
         if(r) r.checked = true;
       }
     }else{
       state.sortField = 'createdAt';
-      state.sortDir   = 'desc';
+      state.sortDir   = 'desc';  // 일반 기본: 최신순
       if($seriesFieldRadios.length){
         const r = $seriesFieldRadios.find(x=> x.checked);
         if(r) r.checked = false;
@@ -247,10 +256,9 @@ if($seriesFieldRadios.length){
   $seriesFieldRadios.forEach(r=>{
     r.addEventListener('change', ()=>{
       state.sortField = r.value; // createdAt | seriesSortAt | title
-      // 필드별 합리적 기본 방향
-      if(state.sortField==='createdAt')      state.sortDir='asc';
-      else if(state.sortField==='seriesSortAt') state.sortDir='desc';
-      else if(state.sortField==='title')     state.sortDir='asc';
+      if(state.sortField==='createdAt')        state.sortDir='asc';  // 등록순 기본
+      else if(state.sortField==='seriesSortAt') state.sortDir='desc'; // 최신화 기본
+      else if(state.sortField==='title')       state.sortDir='asc';  // 가나다 기본
       updateDirToggleLabel(state.sortField, state.sortDir);
       savePrefs();
       resetAndLoad();
@@ -459,7 +467,7 @@ function renderItem(v){
   if(v.createdAt?.toDate){
     meta.appendChild(textNode(fmtDateTime(v.createdAt.toDate())));
   }else{
-    meta.appendChild(textNode('-'));
+    meta.appendChild(textNode('-')));
   }
   if(v.seriesKey){
     const s = document.createElement('span');
@@ -500,8 +508,7 @@ function renderItem(v){
   btnWatch.addEventListener('click', (e)=>{
     e.stopPropagation();
     const qp = new URLSearchParams();
-    // id 우선(문서 기반 재생), 부가로 v/series 전달
-    qp.set('id', v.id);
+    qp.set('id', v.id); // 문서 기반
     const vid = extractYouTubeId(v.url);
     if(vid) qp.set('v', vid);
     if(v.seriesKey) qp.set('series', v.seriesKey);
@@ -524,11 +531,7 @@ function renderItem(v){
     await onBulkDelete([v.id]);
   });
 
-  // 권한: 본인 또는 관리자만 수정/삭제 허용
-  if(!(canEdit(v))){
-    btnCat.disabled = true;
-    btnDel.disabled = true;
-  }
+  if(!(canEdit(v))){ btnCat.disabled = true; btnDel.disabled = true; }
 
   actions.appendChild(btnWatch);
   actions.appendChild(btnCat);
@@ -566,9 +569,10 @@ function syncBulkButtons(){
   const can = count>0;
   if($bulkChangeBtn) $bulkChangeBtn.disabled = !can;
   if($bulkDeleteBtn) $bulkDeleteBtn.disabled = !can;
-  // 권한 없는 경우 버튼 비활성(선택 개수와 무관)
-  if(!state.user && $bulkChangeBtn) $bulkChangeBtn.disabled = true;
-  if(!state.user && $bulkDeleteBtn) $bulkDeleteBtn.disabled = true;
+  if(!state.user){ // 로그인 전면 비활성
+    if($bulkChangeBtn) $bulkChangeBtn.disabled = true;
+    if($bulkDeleteBtn) $bulkDeleteBtn.disabled = true;
+  }
 }
 
 /* ===== 카테고리 다이얼로그 ===== */
@@ -603,25 +607,20 @@ function renderCatDialogOptions(selectedCats){
     }
   }
 }
-
 async function saveCategoryDialog(){
   const targetIds = JSON.parse($catDialog.dataset.target||'[]');
   const checks = Array.from($catDialogBody.querySelectorAll('input[type=checkbox]'));
   const newCats = checks.filter(ch=> ch.checked).map(ch=> ch.value);
 
-  // 권한 확인(모든 타겟이 본인 또는 관리자)
   const editableIds = [];
   for(const id of targetIds){
     const v = state.items.find(x=> x.id===id);
     if(v && canEdit(v)) editableIds.push(id);
   }
-  if(editableIds.length===0){
-    alert('변경할 권한이 없습니다.');
-    return;
-  }
+  if(editableIds.length===0){ alert('변경할 권한이 없습니다.'); return; }
+
   try{
     await Promise.all(editableIds.map(id=> updateDoc(doc(db,'videos',id), { cats: newCats })));
-    // UI 동기화
     for(const v of state.items){
       if(editableIds.includes(v.id)) v.cats = newCats.slice();
     }
@@ -635,7 +634,6 @@ async function saveCategoryDialog(){
 
 /* ===== 삭제 ===== */
 async function onBulkDelete(ids){
-  // 권한 필터
   const dels = ids.filter(id=>{
     const v = state.items.find(x=> x.id===id);
     return v && canEdit(v);
@@ -646,7 +644,6 @@ async function onBulkDelete(ids){
   try{
     await Promise.all(dels.map(id=> deleteDoc(doc(db,'videos',id))));
     state.items = state.items.filter(v=> !dels.includes(v.id));
-    // 선택 상태 정리
     dels.forEach(id=> state.selectedIds.delete(id));
     syncBulkButtons();
     renderList(state.items, /*append=*/false);
@@ -682,7 +679,6 @@ function extractYouTubeId(url){
       return u.pathname.slice(1);
     }
     if(u.hostname.includes('youtube.com')){
-      // /watch?v=, /live/, /shorts/
       if(u.searchParams.get('v')) return u.searchParams.get('v');
       const m = u.pathname.match(/\/(live|shorts|embed)\/([^/?#]+)/);
       if(m) return m[2];
@@ -697,20 +693,15 @@ function guessThumb(url){
 
 /* ===== 초기 로드 ===== */
 (async function init(){
-  // 프리셋 UI 반영
   if(state.cat) $catSelect.value = state.cat;
   if(state.kw)  $keyword.value   = state.kw;
 
-  // 시리즈 그룹이면 라디오 노출
   if($seriesSortFields) $seriesSortFields.style.display = isSeriesCategory(state.cat) ? '' : 'none';
 
-  // 첫 로드
   await resetAndLoad();
 
-  // 스크롤 복원 이벤트
   window.addEventListener('beforeunload', saveScrollY);
   window.addEventListener('scroll', ()=> {
-    // 과도 저장 방지: 간단 스로틀
     if(!state._scrollTick){
       state._scrollTick = true;
       requestAnimationFrame(()=> { saveScrollY(); state._scrollTick = false; });
