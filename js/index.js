@@ -85,7 +85,7 @@ let isMenuOpen=false;
 function openDropdown(){ isMenuOpen=true; dropdown.classList.remove("hidden"); requestAnimationFrame(()=> dropdown.classList.add("show")); }
 function closeDropdown(){ isMenuOpen=false; dropdown.classList.remove("show"); setTimeout(()=> dropdown.classList.add("hidden"),180); }
 
-onAuthStateChanged(auth,(user)=>{
+onAuthStateChanged((user)=>{
   const loggedIn = !!user;
   signupLink?.classList.toggle("hidden", loggedIn);
   signinLink?.classList.toggle("hidden", loggedIn);
