@@ -77,13 +77,17 @@
     .chip-toggle:active{ transform:translateY(0.5px); }
   </style>
 
+ 
   <!-- PWA Manifest / 아이콘 -->
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#000000">
   <link rel="icon" type="image/png" sizes="192x192" href="image/kidsani_logo_192r.png">
   <link rel="icon" type="image/png" sizes="512x512" href="image/kidsani_logo_512r.png">
   <link rel="apple-touch-icon" sizes="180x180" href="image/kidsani_logo_192r.png">
-  <meta name="apple-mobile-web-app-capable" content="yes">
+
+  <!-- 모바일 웹앱 설정 -->
+  <meta name="mobile-web-app-capable" content="yes"> <!-- 신규 권장 -->
+  <meta name="apple-mobile-web-app-capable" content="yes"> <!-- iOS 호환용 -->
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="KidsAni">
 
