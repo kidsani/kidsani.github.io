@@ -1,656 +1,719 @@
-// js/list.js (v2.2.0) — KidsAni
-// - Firestore 필드명 정합: categories→cats, thumbnail→thumb
-// - 시리즈 정렬: seriesSortAt/createdAt/title
-// - 개인자료 로컬키 통일: kidsani_{slot}
-// - 검색/칩/썸네일/큐 생성 모두 cats/thumb 기준
-// - 중복 로드 제거(이 파일이 필요한 모듈들을 import)
-
-import { auth, db } from './firebase-init.js?v=0.1.0';
-import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.0';
-import { CATEGORY_GROUPS } from './categories.js?v=0.2.1';
+// js/list.js — 완전판
+import { auth, db } from './firebase-init.js';
 import {
-  collection, getDocs, getDoc, doc, query, where, orderBy, limit, startAfter
-} from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
+  collection, query, where, orderBy, limit, startAfter, getDocs,
+  doc, getDoc, updateDoc, deleteDoc
+} from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js';
+import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js';
+import { CATEGORIES } from './categories.js';
 
-/* ---------- 전역 내비 중복 방지 플래그 ---------- */
-window.__swipeNavigating = window.__swipeNavigating || false;
+/**
+ * videos 문서 필드(가정):
+ *  - title: string
+ *  - url: string
+ *  - cats: string[]
+ *  - createdAt: Timestamp
+ *  - ownerUid, ownerNick
+ *  - seriesKey?: string
+ *  - seriesTitle?: string
+ *  - episode?: number
+ *  - seriesSortAt?: Timestamp (유튜브 업로드시각 등)
+ *  - thumb?: string
+ *
+ * 인덱스(권장):
+ * 1) cats array-contains + createdAt desc
+ * 2) cats array-contains + createdAt asc
+ * 3) cats array-contains + title asc
+ * 4) cats array-contains + title desc
+ * 5) cats array-contains + seriesSortAt desc
+ * 6) cats array-contains + seriesSortAt asc
+ */
 
-/* ---------- Topbar ---------- */
-const $ = (s)=>document.querySelector(s);
-const signupLink   = $('#signupLink');
-const signinLink   = $('#signinLink');
-const welcome      = $('#welcome');
-const menuBtn      = $('#menuBtn');
-const dropdown     = $('#dropdownMenu');
-const btnSignOut   = $('#btnSignOut');
-const btnGoUpload  = $('#btnGoUpload');
-const btnAbout     = $('#btnAbout');
-const btnList      = $('#btnList');
-const btnMyUploads = $('#btnMyUploads');
-const btnNick      = $('#btnNick');
+const $catSelect   = document.getElementById('catSelect');
+const $sortSelect  = document.getElementById('sortSelect');  // 호환용(숨김)
+const $keyword     = document.getElementById('keyword');
+const $refresh     = document.getElementById('refreshBtn');
+const $more        = document.getElementById('moreBtn');
+const $list        = document.getElementById('list');
+const $empty       = document.getElementById('empty');
+const $banner      = document.getElementById('errorBanner');
 
-function openDropdown(){ dropdown?.classList.remove('hidden'); requestAnimationFrame(()=> dropdown?.classList.add('show')); }
-function closeDropdown(){ dropdown?.classList.remove('show'); setTimeout(()=> dropdown?.classList.add('hidden'), 180); }
+const $dirToggleBtn      = document.getElementById('dirToggleBtn');
+const $seriesSortFields  = document.getElementById('seriesSortFields');
+const $seriesFieldRadios = $seriesSortFields
+  ? Array.from($seriesSortFields.querySelectorAll('input[name="sortField"]'))
+  : [];
 
-onAuthStateChanged(auth,(user)=>{
-  const loggedIn = !!user;
-  signupLink?.classList.toggle('hidden', loggedIn);
-  signinLink?.classList.toggle('hidden', loggedIn);
-  if (welcome) welcome.textContent = loggedIn ? `Welcome! ${user?.displayName || '회원'}` : '';
-  closeDropdown();
+const $bulkChangeBtn = document.getElementById('bulkChangeBtn');
+const $bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
+const $selCount      = document.getElementById('selCount');
+const $catDialog     = document.getElementById('catDialog');
+const $catDialogBody = document.getElementById('catDialogBody');
+const $catSaveBtn    = document.getElementById('catSaveBtn');
+
+const $sentinel = document.getElementById('sentinel');
+
+/* ===== 상태 ===== */
+const PAGE_SIZE = 30;
+const LS_KEY = {
+  CAT: 'list.cat',
+  FIELD: 'list.sort.field',
+  DIR: 'list.sort.dir',
+  KW: 'list.keyword',
+  SCROLL: 'list.scrollY'
+};
+
+let state = {
+  user: null,
+  isAdmin: false,
+
+  cat: '',
+  sortField: 'createdAt', // createdAt | seriesSortAt | title
+  sortDir: 'desc',        // asc | desc
+  kw: '',
+
+  items: [],
+  lastDoc: null,
+  loading: false,
+  reachedEnd: false,
+
+  selectedIds: new Set(),
+
+  // infinite scroll
+  io: null,
+
+  // restore scroll
+  restoringScroll: false,
+};
+
+function $(sel, root=document){ return root.querySelector(sel); }
+function textNode(s){ return document.createTextNode(s); }
+function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+/* ===== 권한 ===== */
+onAuthStateChanged(auth, async (user)=>{
+  state.user = user || null;
+  state.isAdmin = await isAdmin(user?.uid);
+  // 권한은 버튼 활성/비활성에 반영
+  syncBulkButtons();
 });
-menuBtn?.addEventListener('click',(e)=>{ e.stopPropagation(); dropdown?.classList.contains('hidden') ? openDropdown() : closeDropdown(); });
-document.addEventListener('pointerdown',(e)=>{ if(!dropdown || dropdown.classList.contains('hidden')) return; if(!e.target.closest('#dropdownMenu,#menuBtn')) closeDropdown(); }, true);
-document.addEventListener('keydown',(e)=>{ if(e.key==='Escape') closeDropdown(); });
-dropdown?.addEventListener('click',(e)=> e.stopPropagation());
-
-btnSignOut ?.addEventListener('click', async ()=>{ if(!auth.currentUser){ location.href='signin.html'; return; } try{ await fbSignOut(auth);}catch{} closeDropdown(); });
-btnGoUpload?.addEventListener('click', ()=>{ location.href='upload.html'; closeDropdown(); });
-btnAbout   ?.addEventListener('click', ()=>{ location.href='about.html'; closeDropdown(); });
-btnList    ?.addEventListener('click', ()=>{ location.href='list.html'; closeDropdown(); });
-btnMyUploads?.addEventListener('click',()=>{ location.href='manage-uploads.html'; closeDropdown(); });
-btnNick    ?.addEventListener('click', ()=>{ location.href='nick.html'; closeDropdown(); });
-
-/* ---------- DOM ---------- */
-const $cards     = document.getElementById('cards');
-const $msg       = document.getElementById('msg');
-const $q         = document.getElementById('q');
-const $btnSearch = document.getElementById('btnSearch');
-const $btnMore   = document.getElementById('btnMore');
-
-/* ---------- 상태 ---------- */
-const PAGE_SIZE        = 48;   // 한 번에 목표 합계
-const PER_CAT_MIN_LOAD = 12;   // 카테고리당 최소 로드(초기)
-const SERIES_PREFS_KEY = 'seriesSortPrefs';
-
-let isLoading = false;
-let hasMore   = true;
-
-/* 전략 A 상태 */
-const loaders = [];   // [{ cat, isSeries, mode, cursor, exhausted, items:[] }]
-let merged    = [];   // 누적 병합 결과(표시)
-
-/* ---------- 유틸 ---------- */
-function setStatus(t){ if($msg) $msg.textContent = t || ''; }
-function toggleMore(show){ if($btnMore) $btnMore.parentElement.style.display = show ? '' : 'none'; }
-function esc(s=''){ return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
-
-function extractId(url=''){ const m = String(url).match(/(?:youtu\.be\/|v=|shorts\/|embed\/)([^?&\/]+)/); return m ? m[1] : ''; }
-function toThumb(url,fallback=''){ const id=extractId(url); return id?`https://i.ytimg.com/vi/${id}/hqdefault.jpg`:fallback; }
-
-/* 카테고리 라벨 */
-const LABEL_MAP = (()=>{ const m={}; CATEGORY_GROUPS.forEach(g=> g.children?.forEach(c=> { if(c?.value) m[c.value]=c.label||c.value; })); return m; })();
-const getLabel = (key)=> LABEL_MAP[key]||key;
-
-/* 선택 카테고리 */
-function readSelectedCats(){
+async function isAdmin(uid){
+  if(!uid) return false;
   try{
-    const raw = localStorage.getItem('selectedCats');
-    const v = JSON.parse(raw || 'ALL');
-    if (v === 'ALL') return 'ALL';
-    return Array.isArray(v) ? v : 'ALL';
-  }catch{ return 'ALL'; }
-}
-
-/* 시리즈/개인 구분 */
-const SERIES_VALUES   = new Set(CATEGORY_GROUPS.filter(g=>g.series).flatMap(g=> g.children?.map(c=>c.value) || []));
-const PERSONAL_VALUES = new Set(CATEGORY_GROUPS.filter(g=>g.personal).flatMap(g=> g.children?.map(c=>c.value) || []));
-const NORMAL_VALUES   = CATEGORY_GROUPS.filter(g=> !g.series && !g.personal).flatMap(g=> g.children?.map(c=>c.value) || []);
-
-/* seriesSortPrefs */
-function loadSeriesPrefs(){ try{ return JSON.parse(localStorage.getItem(SERIES_PREFS_KEY) || '{}'); }catch{ return {}; } }
-function getSeriesModeFor(cat){
-  const m = loadSeriesPrefs()?.[cat];
-  return (m==='latest'||m==='registered'||m==='title') ? m : 'registered';
-}
-
-/* ---------- YouTube 제목 oEmbed 캐시(7일) ---------- */
-const TitleCache = {
-  get(id){
-    try{
-      const j = localStorage.getItem('yt_title_'+id);
-      if(!j) return null;
-      const { t, exp } = JSON.parse(j);
-      if(exp && Date.now() > exp){ localStorage.removeItem('yt_title_'+id); return null; }
-      return t || null;
-    }catch{ return null; }
-  },
-  set(id, title){
-    try{
-      const exp = Date.now() + 7*24*60*60*1000;
-      localStorage.setItem('yt_title_'+id, JSON.stringify({ t: String(title||'').slice(0,200), exp }));
-    }catch{}
-  }
-};
-const lazyTitleMap = new Map();
-
-async function fetchYouTubeTitleById(id){
-  if(!id) return null;
-  const c = TitleCache.get(id);
-  if(c){ lazyTitleMap.set(id,c); return c; }
-  try{
-    const url = `https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v=${id}`;
-    const res = await fetch(url, { mode:'cors' });
-    if(!res.ok) throw 0;
-    const data = await res.json();
-    const title = data?.title ? String(data.title) : null;
-    if(title){ TitleCache.set(id, title); lazyTitleMap.set(id, title); }
-    return title;
-  }catch{ return null; }
-}
-async function hydrateTitleIfNeeded(titleEl, url, existingTitle){
-  if(!titleEl) return;
-  if(existingTitle && existingTitle !== '(제목 없음)') return;
-  const id = extractId(url); if(!id) return;
-  const t = await fetchYouTubeTitleById(id);
-  if(t) titleEl.textContent = t;
-}
-
-/* ---------- 닉네임 캐시 ---------- */
-const NickCache = {
-  map: new Map(), // uid -> string
-  get(uid){ return this.map.get(uid) || ''; },
-  set(uid, name){ if(uid) this.map.set(uid, String(name||'')); }
-};
-function ownerUidOf(d = {}){ return d?.uid || d?.ownerUid || d?.userUid || null; }
-async function preloadNicknamesFor(docs){
-  const uids = new Set();
-  docs.forEach(x => {
-    const d = x.data || {};
-    const uid = ownerUidOf(d);
-    if (!uid || NickCache.map.has(uid)) return;
-    // 문서에 uNickname 있으면 그걸 우선 쓰고, 없으면 users/{uid} 조회
-    if (d.uNickname){ NickCache.set(uid, d.uNickname); }
-    else uids.add(uid);
-  });
-  if (!uids.size) return;
-  await Promise.all([...uids].map(async (uid) => {
-    try{
-      const snap = await getDoc(doc(db, 'users', uid));
-      const prof = snap.exists() ? snap.data() : null;
-      const name = prof?.displayName || prof?.nickname || '';
-      NickCache.set(uid, name);
-    }catch{ NickCache.set(uid, ''); }
-  }));
-}
-
-/* ---------- 개인자료 모드 ---------- */
-function isPersonalOnlySelection(){
-  try{
-    const raw = localStorage.getItem('selectedCats');
-    const v = JSON.parse(raw || '[]');
-    return Array.isArray(v) && v.length === 1 && PERSONAL_VALUES.has(v[0]);
+    const snap = await getDoc(doc(db,'admins',uid));
+    return snap.exists();
   }catch{ return false; }
 }
-function getPersonalSlot(){
-  try{ const v = JSON.parse(localStorage.getItem('selectedCats') || '[]'); return Array.isArray(v) ? v[0] : null; }
-  catch{ return null; }
+
+/* ===== 카테고리 셀렉트 초기화 (CATEGORIES: { groupKey: { label, items:[{value,label},...] } }) ===== */
+(function initCategoriesSelect(){
+  Object.entries(CATEGORIES).forEach(([_, group])=>{
+    const og = document.createElement('optgroup');
+    og.label = group.label ?? '';
+    (group.items||[]).forEach(cat=>{
+      const opt = document.createElement('option');
+      opt.value = cat.value;
+      opt.textContent = cat.label || cat.value;
+      og.appendChild(opt);
+    });
+    $catSelect.appendChild(og);
+  });
+})();
+
+/* ===== 시리즈 그룹 판정 ===== */
+function isSeriesCategory(catValue){
+  if(!catValue) return false;
+  for(const [, group] of Object.entries(CATEGORIES)){
+    const isSeriesGroup = (group.label||'').includes('시리즈');
+    if(!isSeriesGroup) continue;
+    if((group.items||[]).some(it=> it.value === catValue)) return true;
+  }
+  return false;
 }
-function readPersonalItems(slot){
-  try{ const arr = JSON.parse(localStorage.getItem(`kidsani_${slot}`) || '[]'); return Array.isArray(arr) ? arr : []; }
-  catch{ return []; }
+
+/* ===== 정렬 라벨 갱신 ===== */
+function updateDirToggleLabel(field, dir){
+  if(!$dirToggleBtn) return;
+  if(field === 'createdAt'){
+    $dirToggleBtn.textContent = (dir==='desc' ? '최신순' : '등록순');
+  }else if(field === 'seriesSortAt'){
+    $dirToggleBtn.textContent = (dir==='desc' ? '최신화' : '오래된화');
+  }else if(field === 'title'){
+    $dirToggleBtn.textContent = (dir==='asc' ? '가나다' : '역가나다');
+  }else{
+    $dirToggleBtn.textContent = (dir==='desc' ? '내림차순' : '오름차순');
+  }
 }
-function getPersonalLabel(slot){
+
+/* ===== 정렬 스펙 (라디오/토글 우선) ===== */
+function getSortSpec(){
+  const seriesUIVisible = $seriesSortFields && $seriesSortFields.style.display !== 'none';
+  if(seriesUIVisible && $seriesFieldRadios.length){
+    const sel = $seriesFieldRadios.find(r=> r.checked);
+    const field = sel ? sel.value : 'createdAt';
+    updateDirToggleLabel(field, state.sortDir);
+    return { field, dir: state.sortDir };
+  }
+  // 호환: 기존 select
+  const raw = ($sortSelect && $sortSelect.value) ? $sortSelect.value : 'createdAt_desc';
+  const [field, dir] = raw.split('_');
+  return { field, dir: (dir==='asc'?'asc':'desc') };
+}
+
+/* ===== 로컬 스토리지 ===== */
+function savePrefs(){
   try{
-    const labels = JSON.parse(localStorage.getItem('personalLabels') || '{}');
-    return labels?.[slot] || (slot === 'personal1' ? '개인자료1' : '개인자료2');
-  }catch{ return slot; }
-}
-function renderPersonalList(){
-  const slot  = getPersonalSlot();
-  const items = readPersonalItems(slot);
-  const label = getPersonalLabel(slot);
-
-  $cards.innerHTML = '';
-  const q = ($q?.value || '').trim().toLowerCase();
-  let list = items.slice();
-  if(q){
-    list = list.filter(it =>
-      String(it.title||'').toLowerCase().includes(q) ||
-      String(it.url||'').toLowerCase().includes(q)
-    );
-  }
-
-  if (!list.length){
-    $cards.innerHTML = `<div style="padding:14px;border:1px dashed var(--border);border-radius:12px;color:#cfcfcf;">${esc(label)}에 저장된 영상이 없습니다.</div>`;
-    toggleMore(false); setStatus('0개'); return;
-  }
-
-  const frag = document.createDocumentFragment();
-  list.forEach((it, idx)=>{
-    const title = it.title || '(제목 없음)';
-    const url   = it.url   || '';
-    const id    = extractId(url);
-    const thumb = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : '';
-
-    const card = document.createElement('article');
-    card.className = 'card';
-    card.innerHTML = `
-      <div class="left">
-        <div class="title" title="${esc(title)}">${esc(title)}</div>
-        <div class="chips"><span class="chip">${esc(label)}</span></div>
-        <div class="meta">등록: 나</div>
-      </div>
-      <div class="right">
-        <div class="thumb-wrap"><img class="thumb" src="${esc(thumb)}" alt="썸네일" loading="lazy"></div>
-      </div>
-    `;
-    card.querySelector('.left') ?.addEventListener('click', ()=> openInWatchPersonal(list, idx, slot, label));
-    card.querySelector('.thumb')?.addEventListener('click', ()=> openInWatchPersonal(list, idx, slot, label));
-    frag.appendChild(card);
-  });
-
-  $cards.appendChild(frag);
-  toggleMore(false);
-  setStatus(`총 ${list.length}개`);
-}
-function openInWatchPersonal(items, index, slot, label){
-  const queue = items.map((it,i)=>({
-    id: `local-${slot}-${i}`,
-    url: it.url || '',
-    title: it.title || '(제목 없음)',
-    cats: [label]
-  }));
-  sessionStorage.setItem('playQueue', JSON.stringify(queue));
-  sessionStorage.setItem('playIndex', String(index));
-  location.href = `watch.html?idx=${index}&cats=${encodeURIComponent(slot)}`;
-}
-
-/* ---------- Firestore(일반/시리즈) : 전략 A ---------- */
-function buildLoaders(){
-  loaders.length = 0;
-  const sel = readSelectedCats();
-
-  let targets = [];
-  if (sel === 'ALL'){
-    // 기본: 일반 카테고리 전체만 노출 (제품 의도 유지)
-    targets = NORMAL_VALUES.slice();
-  } else {
-    targets = sel.filter(v => !PERSONAL_VALUES.has(v)); // 개인 제외
-  }
-
-  // 중복 제거
-  targets = [...new Set(targets)];
-
-  for (const cat of targets){
-    const isSeries = SERIES_VALUES.has(cat);
-    const mode = isSeries ? getSeriesModeFor(cat) : 'latest'; // 일반은 최신 고정
-    loaders.push({ cat, isSeries, mode, cursor:null, exhausted:false, items:[] });
-  }
-}
-
-async function loadOneLoader(ld, perCatLimit){
-  if (ld.exhausted) return [];
-
-  const parts = [ where('cats','array-contains', ld.cat) ];
-  // 정렬
-  if (ld.isSeries){
-    if (ld.mode === 'title'){
-      parts.push(orderBy('title','asc'));
-    } else if (ld.mode === 'registered'){
-      parts.push(orderBy('createdAt','asc'));
-    } else { // latest(업로드시각 기반)
-      parts.push(orderBy('seriesSortAt','desc'));
-    }
-  } else {
-    parts.push(orderBy('createdAt','desc'));
-  }
-
-  if (ld.cursor) parts.push(startAfter(ld.cursor));
-  parts.push(limit(perCatLimit));
-
-  let snap;
-  try{
-    snap = await getDocs(query(collection(db,'videos'), ...parts));
-  }catch(e){
-    console.error('[list] query failed (index needed?)', e);
-    setStatus('인덱스가 필요한 정렬입니다. 콘솔의 오류 링크로 인덱스를 생성해 주세요.');
-    ld.exhausted = true;
-    return [];
-  }
-
-  if (snap.empty){ ld.exhausted = true; return []; }
-
-  const batch = snap.docs.map(d => ({ id:d.id, data:d.data(), _created:(d.data()?.createdAt?.toMillis?.()||0) }));
-  ld.cursor = snap.docs[snap.docs.length-1];
-  ld.items = ld.items.concat(batch);
-  return batch;
-}
-
-// 새로 꺼낸 아이템 조각(Chunk)을 merged에 추가
-function takeMergedChunkAndAppend(){
-  const seriesLoaders = loaders.filter(l=> l.isSeries);
-  const normalLoaders = loaders.filter(l=> !l.isSeries);
-
-  // 시리즈끼리 라운드-로빈
-  const seriesChunk = [];
-  let progressed = true;
-  while (progressed){
-    progressed = false;
-    for (const l of seriesLoaders){
-      if (!l.items.length) continue;
-      seriesChunk.push(l.items.shift());
-      progressed = true;
-    }
-  }
-
-  // 일반은 모두 모아 최신순 정렬
-  const normalsChunk = [];
-  normalLoaders.forEach(l => { if (l.items.length) normalsChunk.push(...l.items.splice(0)); });
-  normalsChunk.sort((a,b)=> b._created - a._created);
-
-  const newChunk = seriesChunk.concat(normalsChunk);
-  if (newChunk.length) merged = merged.concat(newChunk);
-
-  const anyBuffered = loaders.some(l => l.items.length > 0);
-  const anyAlive    = loaders.some(l => !l.exhausted);
-  hasMore = anyBuffered || anyAlive;
-
-  toggleMore(hasMore);
-  setStatus(`총 ${merged.length}개`);
-  return newChunk;
-}
-
-async function ensureAtLeast(totalTarget = PAGE_SIZE, perCatMin = PER_CAT_MIN_LOAD){
-  if (isLoading) return;
-  isLoading = true;
-  setStatus(merged.length ? `총 ${merged.length}개 불러옴 · 더 불러오는 중…` : '불러오는 중…');
-
-  const alive = loaders.filter(l=> !l.exhausted);
-  if (!alive.length && loaders.every(l => !l.items.length)){
-    hasMore = false; toggleMore(false);
-    setStatus(merged.length ? `총 ${merged.length}개` : '등록된 영상이 없습니다.');
-    isLoading = false; return;
-  }
-
-  // 1차: 각 로더에서 최소 확보
-  await Promise.all(alive.map(l => loadOneLoader(l, perCatMin).catch(()=>[])));
-
-  // 2차: 부족하면 라운드로 추가
-  const want = ()=> merged.length + loaders.reduce((acc,l)=> acc + l.items.length, 0);
-  let guard = 0;
-  while (want() < totalTarget && loaders.some(l=>!l.exhausted) && guard < 6){
-    for (const l of loaders){
-      if (want() >= totalTarget) break;
-      if (l.exhausted) continue;
-      try{ await loadOneLoader(l, Math.max(6, Math.ceil(perCatMin/2))); }catch{}
-    }
-    guard++;
-  }
-
-  const newChunk = takeMergedChunkAndAppend();
-
-  // 닉네임 프리로드(신규분에 대해)
-  try{ await preloadNicknamesFor(newChunk); }catch{}
-
-  setStatus(`총 ${merged.length}개`);
-  isLoading = false;
-}
-
-/* ---------- 검색 & 렌더 ---------- */
-function filterSearch(list){
-  const q = ($q?.value || '').trim().toLowerCase();
-  if (!q) return list;
-  return list.filter(x => {
-    const d = x.data || {};
-    const url = String(d.url || '').toLowerCase();
-    const id  = extractId(d.url || '');
-    const tt  = String(d.title || lazyTitleMap.get(id) || '').toLowerCase();
-    const uid = ownerUidOf(d);
-    const nick= (NickCache.get(uid) || d.uNickname || '').toLowerCase();
-    const domain = (()=>{ try{ const u = new URL(d.url); return u.hostname.toLowerCase(); }catch{ return ''; }})();
-    return tt.includes(q) || url.includes(q) || nick.includes(q) || domain.includes(q);
-  });
-}
-
-function render(){
-  if (isPersonalOnlySelection()){ renderPersonalList(); return; }
-
-  const list = filterSearch(merged);
-
-  $cards.innerHTML = '';
-  if (!list.length){
-    $cards.innerHTML = `<div style="padding:14px;border:1px dashed var(--border);border-radius:12px;color:#cfcfcf;">결과가 없습니다.</div>`;
-    toggleMore(hasMore);
-    return;
-  }
-
-  const frag = document.createDocumentFragment();
-  list.forEach((x, idx) => {
-    const d     = x.data || {};
-    const title = d.title || '(제목 없음)';
-    const url   = d.url || '';
-    const catsV = Array.isArray(d.cats) ? d.cats : [];
-    const thumb = d.thumb || toThumb(url);
-    const uid   = ownerUidOf(d);
-    const nick  = NickCache.get(uid) || d.uNickname || '회원';
-
-    const chipsHTML = catsV.map(v => `<span class="chip" title="${esc(getLabel(v))}">${esc(getLabel(v))}</span>`).join('');
-
-    const card = document.createElement('article');
-    card.className = 'card';
-    card.innerHTML = `
-      <div class="left" aria-label="영상 열기: ${esc(title)}">
-        <div class="title" title="${esc(title)}">${esc(title)}</div>
-        <div class="chips">${chipsHTML}</div>
-        <div class="meta">등록: ${esc(nick)}</div>
-      </div>
-      <div class="right">
-        <div class="thumb-wrap"><img class="thumb" src="${esc(thumb)}" alt="썸네일" loading="lazy" decoding="async"></div>
-      </div>
-    `;
-
-    hydrateTitleIfNeeded(card.querySelector('.title'), url, title);
-
-    const open = ()=> openInWatch(list, idx);
-    card.querySelector('.left') ?.addEventListener('click', open);
-    card.querySelector('.thumb')?.addEventListener('click', open);
-
-    frag.appendChild(card);
-  });
-  $cards.appendChild(frag);
-  toggleMore(hasMore);
-}
-
-/* ---------- watch로 이동(현재 렌더 순서 기준 큐) ---------- */
-function openInWatch(list, index){
-  const queue = list.map(x => {
-    const d = x.data || {};
-    const id = extractId(d.url || '');
-    return {
-      id: x.id,
-      url: d.url || '',
-      title: d.title || lazyTitleMap.get(id) || '',
-      cats: Array.isArray(d.cats) ? d.cats : []
-    };
-  });
-  sessionStorage.setItem('playQueue', JSON.stringify(queue));
-  sessionStorage.setItem('playIndex', String(index));
-
-  const docId = encodeURIComponent(list[index].id);
-
-  let catsParam = '';
-  try{
-    const raw = localStorage.getItem('selectedCats');
-    const parsed = JSON.parse(raw || '[]');
-    const arr = Array.isArray(parsed) ? parsed : [];
-    if (arr.length) catsParam = `&cats=${encodeURIComponent(arr.join(','))}`;
+    localStorage.setItem(LS_KEY.CAT, state.cat);
+    localStorage.setItem(LS_KEY.FIELD, state.sortField);
+    localStorage.setItem(LS_KEY.DIR, state.sortDir);
+    localStorage.setItem(LS_KEY.KW, state.kw);
   }catch{}
-
-  location.href = `watch.html?doc=${docId}&idx=${index}${catsParam}`;
+}
+function loadPrefs(){
+  try{
+    const cat   = localStorage.getItem(LS_KEY.CAT) || '';
+    const field = localStorage.getItem(LS_KEY.FIELD) || '';
+    const dir   = localStorage.getItem(LS_KEY.DIR) || '';
+    const kw    = localStorage.getItem(LS_KEY.KW) || '';
+    if(cat) state.cat = cat;
+    if(field) state.sortField = field;
+    if(dir) state.sortDir = dir;
+    if(kw) state.kw = kw;
+  }catch{}
+}
+function saveScrollY(){
+  try{ localStorage.setItem(LS_KEY.SCROLL, String(window.scrollY||0)); }catch{}
+}
+function loadScrollY(){
+  try{
+    const y = parseInt(localStorage.getItem(LS_KEY.SCROLL)||'0',10);
+    return isNaN(y) ? 0 : clamp(y, 0, 10_000_000);
+  }catch{ return 0; }
 }
 
-/* ---------- 이벤트 ---------- */
-$q?.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); render(); }});
-$btnSearch?.addEventListener('click', ()=> render());
-$btnMore  ?.addEventListener('click', async ()=>{
-  $btnMore.disabled = true; $btnMore.textContent = '불러오는 중…';
-  try{
-    await ensureAtLeast(PAGE_SIZE, PER_CAT_MIN_LOAD);
-    render();
-  } finally {
-    $btnMore.disabled = false; $btnMore.textContent = '더 보기';
-  }
-});
+/* ===== 이벤트 바인딩 ===== */
+if($refresh) $refresh.addEventListener('click', ()=> resetAndLoad());
+if($more) $more.addEventListener('click', ()=> loadMore());
 
-/* ---------- 초기화 ---------- */
-(async function init(){
-  try{
-    if (isPersonalOnlySelection()){
-      renderPersonalList();
-      return;
-    }
-    buildLoaders();
-    await ensureAtLeast(PAGE_SIZE, PER_CAT_MIN_LOAD);
-    render();
-    toggleMore(hasMore);
-  }catch(e){
-    console.error('[list] init error', e);
-    setStatus('목록을 불러오지 못했습니다.');
-  }
-})();
-
-/* ---------- 스크롤 하단 근접 시 추가 로드 ---------- */
-const SCROLL_LOAD_OFFSET = 320;
-window.addEventListener('scroll', async ()=>{
-  if (isLoading || !hasMore) return;
-  const nearBottom = (window.innerHeight + window.scrollY) >= (document.body.offsetHeight - SCROLL_LOAD_OFFSET);
-  if (!nearBottom) return;
-
-  await ensureAtLeast(PAGE_SIZE, Math.max(8, Math.floor(PER_CAT_MIN_LOAD/2)));
-  render();
-}, { passive:true });
-
-/* ===================== */
-/* Slide-out CSS (백업용) */
-/* ===================== */
-(function injectSlideCSS(){
-  if (document.getElementById('slide-css-152')) return;
-  const style = document.createElement('style');
-  style.id = 'slide-css-152';
-  style.textContent = `
-@keyframes pageSlideLeft { from { transform: translateX(0); opacity:1; } to { transform: translateX(-22%); opacity:.92; } }
-@keyframes pageSlideRight{ from { transform: translateX(0); opacity:1; } to { transform: translateX(22%);  opacity:.92; } }
-:root.slide-out-left  body { animation: pageSlideLeft 0.26s ease forwards; }
-:root.slide-out-right body { animation: pageSlideRight 0.26s ease forwards; }
-@media (prefers-reduced-motion: reduce){
-  :root.slide-out-left  body,
-  :root.slide-out-right body { animation:none; }
-}`;
-  document.head.appendChild(style);
-})();
-
-/* ===================== */
-/* 스와이프: 우→좌(index로), 반대쪽 차단 */
-/* ===================== */
-function initSwipeNav({ goLeftHref=null, goRightHref=null, animateMs=260, deadZoneCenterRatio=0.30 } = {}){
-  let sx=0, sy=0, t0=0, tracking=false;
-  const THRESH_X = 70, MAX_OFF_Y = 80, MAX_TIME = 600;
-  const getPoint = (e) => e.touches?.[0] || e.changedTouches?.[0] || e;
-
-  function onStart(e){
-    const p = getPoint(e); if(!p) return;
-    const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
-    const dz = Math.max(0, Math.min(0.9, deadZoneCenterRatio));
-    const L  = vw * (0.5 - dz/2), R = vw * (0.5 + dz/2);
-    if (p.clientX >= L && p.clientX <= R) { tracking = false; return; }
-    sx = p.clientX; sy = p.clientY; t0 = Date.now(); tracking = true;
-  }
-  function onEnd(e){
-    if(!tracking) return; tracking = false;
-    if (window.__swipeNavigating) return;
-    const p = getPoint(e);
-    const dx = p.clientX - sx, dy = p.clientY - sy, dt = Date.now() - t0;
-    if (Math.abs(dy) > MAX_OFF_Y || dt > MAX_TIME) return;
-    if (dx <= -THRESH_X && goLeftHref){
-      window.__swipeNavigating = true;
-      document.documentElement.classList.add('slide-out-left');
-      setTimeout(()=> location.href = goLeftHref, animateMs);
-    }
-  }
-  document.addEventListener('touchstart', onStart, { passive:true });
-  document.addEventListener('touchend',   onEnd,   { passive:true });
-  document.addEventListener('pointerdown',onStart, { passive:true });
-  document.addEventListener('pointerup',  onEnd,   { passive:true });
+if($keyword){
+  $keyword.addEventListener('input', ()=>{
+    state.kw = ($keyword.value||'').trim().toLowerCase();
+    savePrefs();
+    // 서버 재쿼리 없이 클라 필터
+    applyClientSearch();
+  });
 }
-initSwipeNav({ goLeftHref: 'index.html', goRightHref: null, deadZoneCenterRatio: 0.30 });
 
-(function(){
-  function initDragSwipe({ goLeftHref=null, threshold=60, slop=45, timeMax=700, feel=1.0, deadZoneCenterRatio=0.15 }={}){
-    const page = document.querySelector('main') || document.body;
-    if(!page) return;
+if($sortSelect){
+  $sortSelect.addEventListener('change', ()=>{
+    const [field, dir] = $sortSelect.value.split('_');
+    state.sortField = field;
+    state.sortDir   = (dir==='asc'?'asc':'desc');
+    updateDirToggleLabel(state.sortField, state.sortDir);
+    savePrefs();
+    resetAndLoad();
+  });
+}
 
-    if(!page.style.willChange || !page.style.willChange.includes('transform')){
-      page.style.willChange = (page.style.willChange ? page.style.willChange + ', transform' : 'transform');
-    }
+if($catSelect){
+  $catSelect.addEventListener('change', ()=>{
+    state.cat = $catSelect.value || '';
+    savePrefs();
 
-    let x0=0, y0=0, t0=0, active=false, canceled=false;
-    const isInteractive = (el)=> !!(el && (el.closest('input,textarea,select,button,a,[role="button"],[contenteditable="true"]')));
+    const series = isSeriesCategory(state.cat);
+    if($seriesSortFields) $seriesSortFields.style.display = series ? '' : 'none';
 
-    function reset(anim=true){
-      if(anim) page.style.transition = 'transform 180ms ease';
-      requestAnimationFrame(()=>{ page.style.transform = 'translateX(0px)'; });
-      setTimeout(()=>{ if(anim) page.style.transition = ''; }, 200);
-    }
-
-    function start(e){
-      if (window.__swipeNavigating) return;
-      const t = (e.touches && e.touches[0]) || (e.pointerType ? e : null);
-      if(!t) return;
-      if(isInteractive(e.target)) return;
-
-      const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
-      const dz = Math.max(0, Math.min(0.9, deadZoneCenterRatio));
-      const L  = vw * (0.5 - dz/2), R  = vw * (0.5 + dz/2);
-      if (t.clientX >= L && t.clientX <= R) return;
-
-      x0 = t.clientX; y0 = t.clientY; t0 = Date.now();
-      active = true; canceled = false;
-      page.style.transition = 'none';
-    }
-
-    function move(e){
-      if(!active) return;
-      const t = (e.touches && e.touches[0]) || (e.pointerType ? e : null);
-      if(!t) return;
-      const dx = t.clientX - x0;
-      const dy = t.clientY - y0;
-      if(Math.abs(dy) > slop){ canceled = true; active = false; reset(true); return; }
-      // 오른쪽 이동 차단
-      if (dx > 0){ page.style.transform = 'translateX(0px)'; return; }
-      e.preventDefault();
-      page.style.transform = 'translateX(' + (dx * feel) + 'px)';
-    }
-
-    function end(e){
-      if(!active) return; active = false;
-      const t = (e.changedTouches && e.changedTouches[0]) || (e.pointerType ? e : null);
-      if(!t) return;
-      const dx = t.clientX - x0;
-      const dy = t.clientY - y0;
-      const dt = Date.now() - t0;
-
-      if(canceled || Math.abs(dy) > slop || dt > timeMax){ reset(true); return; }
-
-      if(dx <= -threshold && goLeftHref){
-        window.__swipeNavigating = true;
-        page.style.transition = 'transform 160ms ease';
-        page.style.transform  = 'translateX(-100vw)';
-        setTimeout(()=>{ location.href = goLeftHref; }, 150);
-      } else {
-        reset(true);
+    if(series){
+      state.sortField = 'createdAt';
+      state.sortDir   = 'asc';
+      if($seriesFieldRadios.length){
+        const r = $seriesFieldRadios.find(x=> x.value==='createdAt');
+        if(r) r.checked = true;
+      }
+    }else{
+      state.sortField = 'createdAt';
+      state.sortDir   = 'desc';
+      if($seriesFieldRadios.length){
+        const r = $seriesFieldRadios.find(x=> x.checked);
+        if(r) r.checked = false;
       }
     }
+    updateDirToggleLabel(state.sortField, state.sortDir);
+    resetAndLoad();
+  });
+}
 
-    document.addEventListener('touchstart',  start, { passive:true });
-    document.addEventListener('touchmove',   move,  { passive:false });
-    document.addEventListener('touchend',    end,   { passive:true, capture:true });
+if($seriesFieldRadios.length){
+  $seriesFieldRadios.forEach(r=>{
+    r.addEventListener('change', ()=>{
+      state.sortField = r.value; // createdAt | seriesSortAt | title
+      // 필드별 합리적 기본 방향
+      if(state.sortField==='createdAt')      state.sortDir='asc';
+      else if(state.sortField==='seriesSortAt') state.sortDir='desc';
+      else if(state.sortField==='title')     state.sortDir='asc';
+      updateDirToggleLabel(state.sortField, state.sortDir);
+      savePrefs();
+      resetAndLoad();
+    });
+  });
+}
 
-    document.addEventListener('pointerdown', start, { passive:true });
-    document.addEventListener('pointermove', move,  { passive:false });
-    document.addEventListener('pointerup',   end,   { passive:true, capture:true });
+if($dirToggleBtn){
+  $dirToggleBtn.addEventListener('click', ()=>{
+    state.sortDir = (state.sortDir==='asc'?'desc':'asc');
+    updateDirToggleLabel(state.sortField, state.sortDir);
+    savePrefs();
+    resetAndLoad();
+  });
+}
+
+/* ===== 일괄 액션 ===== */
+if($bulkChangeBtn) $bulkChangeBtn.addEventListener('click', ()=>{
+  if(state.selectedIds.size===0) return;
+  openCategoryDialog([...state.selectedIds]);
+});
+if($bulkDeleteBtn) $bulkDeleteBtn.addEventListener('click', ()=>{
+  if(state.selectedIds.size===0) return;
+  onBulkDelete([...state.selectedIds]);
+});
+if($catSaveBtn){
+  $catSaveBtn.addEventListener('click', async (e)=>{
+    e.preventDefault();
+    await saveCategoryDialog();
+  });
+}
+
+/* ===== 인덱스 에러 배너 ===== */
+function showIndexBanner(err){
+  if(!$banner) return;
+  const msg = String(err?.message||'');
+  const m = msg.match(/https:\/\/console\.firebase\.google\.com[^\s)"]+/);
+  const link = m ? m[0] : '';
+  $banner.style.display = '';
+  $banner.innerHTML = link
+    ? `정렬/필터에 필요한 색인이 없습니다. 콘솔에서 색인을 생성해 주세요: <a href="${link}" target="_blank" rel="noopener">색인 만들기</a>`
+    : `정렬/필터에 필요한 색인이 없습니다. Firestore 콘솔에서 색인을 생성해 주세요.`;
+}
+
+/* ===== 초기 상태 복원 ===== */
+loadPrefs();
+if(state.cat) $catSelect.value = state.cat;
+if(state.kw){ $keyword.value = state.kw; }
+const seriesInit = isSeriesCategory(state.cat);
+if($seriesSortFields) $seriesSortFields.style.display = seriesInit ? '' : 'none';
+updateDirToggleLabel(state.sortField, state.sortDir);
+
+/* ===== 무한 스크롤 ===== */
+if('IntersectionObserver' in window && $sentinel){
+  state.io = new IntersectionObserver((entries)=>{
+    for(const e of entries){
+      if(e.isIntersecting && !state.loading && !state.reachedEnd){
+        loadMore();
+      }
+    }
+  }, { rootMargin: '200px' });
+  state.io.observe($sentinel);
+}
+
+/* ===== 쿼리 빌드 ===== */
+function buildQuery({ cat, sortField, sortDir, pageStart }){
+  const baseCol = collection(db, 'videos');
+  const parts = [];
+  if(cat) parts.push(where('cats','array-contains',cat));
+  parts.push(orderBy(sortField, sortDir==='asc'?'asc':'desc'));
+  if(pageStart) parts.push(startAfter(pageStart));
+  parts.push(limit(PAGE_SIZE));
+  return query(baseCol, ...parts);
+}
+
+/* ===== 로딩 ===== */
+async function resetAndLoad(){
+  if(state.loading) return;
+  state.items = [];
+  state.lastDoc = null;
+  state.reachedEnd = false;
+  state.selectedIds.clear();
+  syncBulkButtons();
+
+  $list.innerHTML = '';
+  if($empty) $empty.hidden = true;
+  if($more) $more.disabled = true;
+  if($banner) $banner.style.display = 'none';
+
+  await loadMore(true);
+}
+
+async function loadMore(first=false){
+  if(state.loading || state.reachedEnd) return;
+  state.loading = true;
+
+  try{
+    const q = buildQuery({
+      cat: state.cat,
+      sortField: state.sortField,
+      sortDir: state.sortDir,
+      pageStart: state.lastDoc
+    });
+    const snap = await getDocs(q);
+    const docs = snap.docs;
+    if(docs.length===0){
+      if(first && $list.childElementCount===0){
+        $empty.hidden = false;
+      }
+      state.reachedEnd = true;
+      if($more) $more.disabled = true;
+      return;
+    }
+    state.lastDoc = docs[docs.length-1];
+
+    const batch = docs.map(d => ({ id: d.id, ...d.data() }));
+    state.items.push(...batch);
+
+    renderList(batch, /*append=*/true);
+    applyClientSearch(); // 키워드 즉시 반영
+
+    if($more) $more.disabled = !state.lastDoc;
+  }catch(err){
+    console.error('[list] 로드 오류:', err);
+    showIndexBanner(err);
+    alert('목록 불러오기 중 오류가 발생했습니다. 인덱스가 필요한 경우 콘솔 안내 링크로 생성해 주세요.');
+  }finally{
+    state.loading = false;
+
+    // 첫 로드시 스크롤 복원
+    if(!state.restoringScroll){
+      state.restoringScroll = true;
+      const y = loadScrollY();
+      if(y>0) setTimeout(()=> window.scrollTo(0,y), 0);
+    }
+  }
+}
+
+/* ===== 검색: 클라이언트 필터 ===== */
+function applyClientSearch(){
+  const q = (state.kw||'').trim().toLowerCase();
+  const nodes = Array.from($list.children);
+  if(!q){
+    nodes.forEach(n=> n.style.display='');
+    return;
+  }
+  nodes.forEach(n=>{
+    const title = $('.title', n)?.textContent?.toLowerCase()||'';
+    const url   = $('.url', n)?.textContent?.toLowerCase()||'';
+    n.style.display = (title.includes(q) || url.includes(q)) ? '' : 'none';
+  });
+}
+
+/* ===== 렌더 ===== */
+function renderList(items, append){
+  const frag = document.createDocumentFragment();
+  for(const v of items){
+    frag.appendChild(renderItem(v));
+  }
+  if(append) $list.appendChild(frag);
+  else { $list.innerHTML=''; $list.appendChild(frag); }
+}
+
+function renderItem(v){
+  const li = document.createElement('article');
+  li.className = 'item';
+
+  // 좌측 체크
+  const colCheck = document.createElement('div');
+  colCheck.className = 'col-check';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.dataset.id = v.id;
+  cb.addEventListener('change', ()=>{
+    if(cb.checked) state.selectedIds.add(v.id);
+    else state.selectedIds.delete(v.id);
+    syncBulkButtons();
+  });
+  colCheck.appendChild(cb);
+
+  // 메인
+  const colMain = document.createElement('div');
+  colMain.className = 'col-main';
+
+  const title = document.createElement('div');
+  title.className = 'title';
+  title.textContent = v.title || '(제목 없음)';
+  title.title = v.title || '';
+
+  const url = document.createElement('div');
+  url.className = 'url';
+  url.textContent = v.url || '';
+  url.title = v.url || '';
+
+  const chips = document.createElement('div');
+  chips.className = 'chips';
+  (v.cats||[]).forEach(c=>{
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = labelFromCat(c);
+    chips.appendChild(chip);
+  });
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  if(v.createdAt?.toDate){
+    meta.appendChild(textNode(fmtDateTime(v.createdAt.toDate())));
+  }else{
+    meta.appendChild(textNode('-'));
+  }
+  if(v.seriesKey){
+    const s = document.createElement('span');
+    s.className = 'series-badge';
+    s.textContent = v.seriesTitle ? `시리즈: ${v.seriesTitle}` : '시리즈';
+    meta.appendChild(s);
+    if(typeof v.episode === 'number'){
+      const e = document.createElement('span');
+      e.className = 'episode-badge';
+      e.textContent = `EP ${v.episode}`;
+      meta.appendChild(e);
+    }
   }
 
-  // 오른쪽 페이지 없음 → index로만 복귀
-  initDragSwipe({ goLeftHref: 'index.html', threshold:60, slop:45, timeMax:700, feel:1.0, deadZoneCenterRatio: 0.15 });
+  colMain.appendChild(title);
+  colMain.appendChild(url);
+  colMain.appendChild(chips);
+  colMain.appendChild(meta);
+
+  // 우측
+  const colSide = document.createElement('div');
+  colSide.className = 'col-side';
+
+  const thumb = document.createElement('img');
+  thumb.className = 'thumb';
+  thumb.alt = '썸네일';
+  thumb.referrerPolicy = 'no-referrer';
+  thumb.loading = 'lazy';
+  thumb.src = v.thumb || guessThumb(v.url);
+  thumb.onerror = ()=> { thumb.src = './image/copytube_logo_512.png'; };
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  const btnWatch = document.createElement('button');
+  btnWatch.className = 'btn';
+  btnWatch.textContent = '보기';
+  btnWatch.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    const qp = new URLSearchParams();
+    // id 우선(문서 기반 재생), 부가로 v/series 전달
+    qp.set('id', v.id);
+    const vid = extractYouTubeId(v.url);
+    if(vid) qp.set('v', vid);
+    if(v.seriesKey) qp.set('series', v.seriesKey);
+    location.href = `./watch.html?${qp.toString()}`;
+  });
+
+  const btnCat = document.createElement('button');
+  btnCat.className = 'btn btn-ghost';
+  btnCat.textContent = '카테고리';
+  btnCat.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    openCategoryDialog([v.id], v.cats||[]);
+  });
+
+  const btnDel = document.createElement('button');
+  btnDel.className = 'btn btn-ghost';
+  btnDel.textContent = '삭제';
+  btnDel.addEventListener('click', async (e)=>{
+    e.stopPropagation();
+    await onBulkDelete([v.id]);
+  });
+
+  // 권한: 본인 또는 관리자만 수정/삭제 허용
+  if(!(canEdit(v))){
+    btnCat.disabled = true;
+    btnDel.disabled = true;
+  }
+
+  actions.appendChild(btnWatch);
+  actions.appendChild(btnCat);
+  actions.appendChild(btnDel);
+
+  colSide.appendChild(thumb);
+  colSide.appendChild(actions);
+
+  // 전체 아이템 클릭 → 보기
+  li.addEventListener('click', ()=>{
+    const qp = new URLSearchParams();
+    qp.set('id', v.id);
+    const vid = extractYouTubeId(v.url);
+    if(vid) qp.set('v', vid);
+    if(v.seriesKey) qp.set('series', v.seriesKey);
+    location.href = `./watch.html?${qp.toString()}`;
+  });
+
+  li.appendChild(colCheck);
+  li.appendChild(colMain);
+  li.appendChild(colSide);
+
+  return li;
+}
+
+function canEdit(v){
+  if(!state.user) return false;
+  if(state.isAdmin) return true;
+  return v.ownerUid && v.ownerUid === state.user.uid;
+}
+
+function syncBulkButtons(){
+  const count = state.selectedIds.size;
+  if($selCount) $selCount.textContent = `선택 ${count}`;
+  const can = count>0;
+  if($bulkChangeBtn) $bulkChangeBtn.disabled = !can;
+  if($bulkDeleteBtn) $bulkDeleteBtn.disabled = !can;
+  // 권한 없는 경우 버튼 비활성(선택 개수와 무관)
+  if(!state.user && $bulkChangeBtn) $bulkChangeBtn.disabled = true;
+  if(!state.user && $bulkDeleteBtn) $bulkDeleteBtn.disabled = true;
+}
+
+/* ===== 카테고리 다이얼로그 ===== */
+function openCategoryDialog(targetIds, currentCats=[]){
+  if(!$catDialog) return;
+  $catDialog.dataset.target = JSON.stringify(targetIds);
+  renderCatDialogOptions(currentCats);
+  $catDialog.showModal();
+}
+function renderCatDialogOptions(selectedCats){
+  $catDialogBody.innerHTML = '';
+  for(const [, group] of Object.entries(CATEGORIES)){
+    const h = document.createElement('div');
+    h.style.cssText = 'margin:6px 0 2px; opacity:.85; font-weight:700;';
+    h.textContent = group.label || '';
+    $catDialogBody.appendChild(h);
+
+    for(const item of (group.items||[])){
+      const id = `dlg_${item.value}`;
+      const row = document.createElement('label');
+      row.style.cssText = 'display:flex; gap:8px; align-items:center; margin:2px 0;';
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.id = id;
+      chk.value = item.value;
+      chk.checked = selectedCats.includes(item.value);
+      const span = document.createElement('span');
+      span.textContent = item.label || item.value;
+      row.appendChild(chk);
+      row.appendChild(span);
+      $catDialogBody.appendChild(row);
+    }
+  }
+}
+
+async function saveCategoryDialog(){
+  const targetIds = JSON.parse($catDialog.dataset.target||'[]');
+  const checks = Array.from($catDialogBody.querySelectorAll('input[type=checkbox]'));
+  const newCats = checks.filter(ch=> ch.checked).map(ch=> ch.value);
+
+  // 권한 확인(모든 타겟이 본인 또는 관리자)
+  const editableIds = [];
+  for(const id of targetIds){
+    const v = state.items.find(x=> x.id===id);
+    if(v && canEdit(v)) editableIds.push(id);
+  }
+  if(editableIds.length===0){
+    alert('변경할 권한이 없습니다.');
+    return;
+  }
+  try{
+    await Promise.all(editableIds.map(id=> updateDoc(doc(db,'videos',id), { cats: newCats })));
+    // UI 동기화
+    for(const v of state.items){
+      if(editableIds.includes(v.id)) v.cats = newCats.slice();
+    }
+    renderList(state.items, /*append=*/false);
+    applyClientSearch();
+  }catch(err){
+    console.error('[list] 카테고리 변경 오류:', err);
+    alert('카테고리 변경 중 오류가 발생했습니다.');
+  }
+}
+
+/* ===== 삭제 ===== */
+async function onBulkDelete(ids){
+  // 권한 필터
+  const dels = ids.filter(id=>{
+    const v = state.items.find(x=> x.id===id);
+    return v && canEdit(v);
+  });
+  if(dels.length===0){ alert('삭제할 권한이 없습니다.'); return; }
+  if(!confirm(`정말로 ${dels.length}개 항목을 삭제할까요?`)) return;
+
+  try{
+    await Promise.all(dels.map(id=> deleteDoc(doc(db,'videos',id))));
+    state.items = state.items.filter(v=> !dels.includes(v.id));
+    // 선택 상태 정리
+    dels.forEach(id=> state.selectedIds.delete(id));
+    syncBulkButtons();
+    renderList(state.items, /*append=*/false);
+    applyClientSearch();
+  }catch(err){
+    console.error('[list] 삭제 오류:', err);
+    alert('삭제 중 오류가 발생했습니다.');
+  }
+}
+
+/* ===== 유틸 ===== */
+function labelFromCat(value){
+  for(const [, group] of Object.entries(CATEGORIES)){
+    for(const item of (group.items||[])){
+      if(item.value===value) return item.label || value;
+    }
+  }
+  return value;
+}
+function fmtDateTime(d){
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  const hh = String(d.getHours()).padStart(2,'0');
+  const mm = String(d.getMinutes()).padStart(2,'0');
+  return `${y}-${m}-${day} ${hh}:${mm}`;
+}
+function extractYouTubeId(url){
+  try{
+    if(!url) return '';
+    const u = new URL(url);
+    if(u.hostname==='youtu.be'){
+      return u.pathname.slice(1);
+    }
+    if(u.hostname.includes('youtube.com')){
+      // /watch?v=, /live/, /shorts/
+      if(u.searchParams.get('v')) return u.searchParams.get('v');
+      const m = u.pathname.match(/\/(live|shorts|embed)\/([^/?#]+)/);
+      if(m) return m[2];
+    }
+  }catch{}
+  return '';
+}
+function guessThumb(url){
+  const vid = extractYouTubeId(url);
+  return vid ? `https://i.ytimg.com/vi/${vid}/hqdefault.jpg` : './image/copytube_logo_512.png';
+}
+
+/* ===== 초기 로드 ===== */
+(async function init(){
+  // 프리셋 UI 반영
+  if(state.cat) $catSelect.value = state.cat;
+  if(state.kw)  $keyword.value   = state.kw;
+
+  // 시리즈 그룹이면 라디오 노출
+  if($seriesSortFields) $seriesSortFields.style.display = isSeriesCategory(state.cat) ? '' : 'none';
+
+  // 첫 로드
+  await resetAndLoad();
+
+  // 스크롤 복원 이벤트
+  window.addEventListener('beforeunload', saveScrollY);
+  window.addEventListener('scroll', ()=> {
+    // 과도 저장 방지: 간단 스로틀
+    if(!state._scrollTick){
+      state._scrollTick = true;
+      requestAnimationFrame(()=> { saveScrollY(); state._scrollTick = false; });
+    }
+  });
 })();
