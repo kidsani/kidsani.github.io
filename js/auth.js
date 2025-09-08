@@ -2,7 +2,7 @@
 // - Firebase 모듈식 SDK만 사용
 // - onAuthStateChanged는 'auth'를 내부에서 넣는 래퍼로 export (콜백만 받으면 됨)
 
-import { auth, db } from "./firebase-init.js?v=0.1.0";
+import { auth, db } from "./firebase-init.js";
 export { auth, db };  // 필요시 그대로 사용
 
 // Firebase Auth 원함수들
