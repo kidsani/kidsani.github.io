@@ -1,8 +1,8 @@
-// js/firebase-init.js  (safe web version)
+// kidsani / js/firebase-init.js  v0.1.0
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
 import {
+  initializeAuth,
   getAuth,
-  setPersistence,
   indexedDBLocalPersistence,
   browserLocalPersistence,
   browserSessionPersistence,
@@ -10,7 +10,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
 import { getFirestore } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
 
-const firebaseConfig = {
+const fallback = {
   apiKey: "AIzaSyAhBvRE0D2Vkg4m800kkTaFi360Y4_4nLc",
   authDomain: "kidsani.firebaseapp.com",
   projectId: "kidsani",
@@ -20,23 +20,31 @@ const firebaseConfig = {
   measurementId: "G-E336TJY0ZE"
 };
 
+const firebaseConfig =
+  (globalThis.__FIREBASE_CONFIG && typeof globalThis.__FIREBASE_CONFIG === 'object')
+    ? globalThis.__FIREBASE_CONFIG
+    : fallback;
+
 const app = initializeApp(firebaseConfig);
 
-// ✅ 웹 기본 초기화
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-
-// 선택: 퍼시스턴스 우선순위 설정(실패 시 폴백)
-try {
-  await setPersistence(auth, indexedDBLocalPersistence);
-} catch {
+let auth;
+if (!globalThis.__kidsaniAuthInitialized) {
   try {
-    await setPersistence(auth, browserLocalPersistence);
-  } catch {
-    try {
-      await setPersistence(auth, browserSessionPersistence);
-    } catch {
-      await setPersistence(auth, inMemoryPersistence);
-    }
+    auth = initializeAuth(app, {
+      persistence: [
+        indexedDBLocalPersistence,
+        browserLocalPersistence,
+        browserSessionPersistence,
+        inMemoryPersistence,
+      ],
+    });
+  } catch (e) {
+    auth = getAuth(app);
   }
+  globalThis.__kidsaniAuthInitialized = true;
+} else {
+  auth = getAuth(app);
 }
+
+export { auth };
+export const db = getFirestore(app);
