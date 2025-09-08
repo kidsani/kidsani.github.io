@@ -3,9 +3,9 @@
 // - 저장 키(seriesSortPrefs)는 그대로, 값만 "registered" | "latest" | "title" 지원
 // - 기존 기능(연속재생, 드롭다운, 스와이프, 개인자료 단독선택, 그룹 인디eterminate 등) 유지
 
-import { CATEGORY_GROUPS } from './categories.js?v=0.2.1';
-import { auth } from './firebase-init.js?v=0.1.0';
-import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.0';
+import { CATEGORY_GROUPS } from './categories.js';
+import { auth } from './firebase-init.js';
+import { onAuthStateChanged, signOut as fbSignOut } from './auth.js';
 
 const GROUP_ORDER_KEY = 'groupOrderV1';
 const SERIES_SORT_PREFS_KEY = 'seriesSortPrefs'; // { [categoryValue]: "registered" | "latest" | "title" }
