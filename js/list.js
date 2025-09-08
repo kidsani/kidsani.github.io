@@ -7,8 +7,8 @@ import { auth, db } from './firebase-init.js';
 import {
   collection, query, where, orderBy, limit, startAfter, getDocs,
   doc, getDoc, updateDoc, deleteDoc
-} from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js';
-import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js';
+} from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
+import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js';
 import { CATEGORY_GROUPS } from './categories.js';
 
 /* =========[ 어댑터 ]=========
