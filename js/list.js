@@ -658,8 +658,6 @@ function init(){
   }
 
   // 일괄 액션
-  const $bulkChangeBtn = $('#bulkChangeBtn');
-  const $bulkDeleteBtn = $('#bulkDeleteBtn');
   if($bulkChangeBtn) $bulkChangeBtn.addEventListener('click', ()=>{
     if(state.selectedIds.size===0) return;
     openCategoryDialog([...state.selectedIds]);
