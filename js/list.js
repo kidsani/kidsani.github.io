@@ -467,7 +467,7 @@ function renderItem(v){
   if(v.createdAt?.toDate){
     meta.appendChild(textNode(fmtDateTime(v.createdAt.toDate())));
   }else{
-    meta.appendChild(textNode('-')));
+    meta.appendChild(textNode('-'));
   }
   if(v.seriesKey){
     const s = document.createElement('span');
