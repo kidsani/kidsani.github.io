@@ -84,6 +84,29 @@
 main { touch-action: pan-y; }  /* 수직 스크롤은 브라우저에 맡기고, 수평 제스처는 우리가 처리 */
 
   </style>
+    <!-- PWA Manifest / 아이콘 -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#000000">
+  <link rel="icon" type="image/png" sizes="192x192" href="image/kidsani_logo_192r.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="image/kidsani_logo_512r.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="image/kidsani_logo_192r.png">
+
+  <!-- 모바일 웹앱 설정 -->
+  <meta name="mobile-web-app-capable" content="yes"> <!-- 신규 권장 -->
+  <meta name="apple-mobile-web-app-capable" content="yes"> <!-- iOS 호환용 -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="KidsAni">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="KidsAni" />
+  <meta property="og:description" content="아이들을 위한 영상 큐레이션 플랫폼, KidsAni" />
+  <meta property="og:image" content="https://copytube.github.io/image/kidsani_logo_512r.png" />
+  <meta property="og:url" content="https://copytube.github.io/" />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="KidsAni">
+  <meta name="twitter:description" content="아이들을 위한 영상 큐레이션 플랫폼, KidsAni">
+  <meta name="twitter:image" content="https://copytube.github.io/image/kidsani_logo_512r.png">
 </head>
 <body>
   <!-- 공통 상단바 -->
