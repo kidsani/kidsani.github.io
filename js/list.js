@@ -19,7 +19,7 @@ const $btnMore = document.getElementById('btnMore');
 
 // --- 상태 관리 ---
 const PAGE_SIZE = 24;
-let currentState = { seriesSort: 'asc' }; // [수정] 시리즈 정렬 기본값 추가
+let currentState = { seriesSort: 'asc' };
 let lastDoc = null;
 let hasMore = true;
 let isLoading = false;
@@ -43,7 +43,7 @@ async function init() {
   loadList(true);
 }
 
-// --- 상단바/드롭다운 (재사용) ---
+// --- 상단바/드롭다운 ---
 function initTopbar() {
   const signupLink = document.getElementById('signupLink');
   const signinLink = document.getElementById('signinLink');
@@ -66,12 +66,13 @@ function initTopbar() {
   dropdown?.addEventListener('click', e => e.stopPropagation());
   
   btnSignOut?.addEventListener('click', () => auth.signOut());
-  btnGoUpload?.addEventListener('click', () => location.href = 'upload.html');
-  btnManageUploads?.addEventListener('click', () => location.href = 'manage-uploads.html'; });
+  btnGoUpload?.addEventListener('click', () => { location.href = 'upload.html'; });
+  // [수정] SyntaxError를 유발했던 부분의 문법을 명확하게 수정
+  btnManageUploads?.addEventListener('click', () => { location.href = 'manage-uploads.html'; });
 }
 
 
-// --- 카테고리 UI 초기화 (style.css .group, .child-grid 구조 사용) ---
+// --- 카테고리 UI 초기화 ---
 function initCategoriesUI() {
   const frag = document.createDocumentFragment();
   CATEGORY_GROUPS.forEach(group => {
@@ -112,7 +113,7 @@ function readStateFromURL() {
   if (params.has('sort')) state.sort = params.get('sort');
   if (params.has('query')) state.query = params.get('query');
   if (params.has('seriesKey')) state.seriesKey = params.get('seriesKey');
-  if (params.has('seriesSort')) state.seriesSort = params.get('seriesSort'); // [추가]
+  if (params.has('seriesSort')) state.seriesSort = params.get('seriesSort');
   return state;
 }
 
@@ -123,7 +124,7 @@ function writeStateToURL(state) {
   if (state.query) params.set('query', state.query);
   if (state.seriesKey) {
     params.set('seriesKey', state.seriesKey);
-    params.set('seriesSort', state.seriesSort || 'asc'); // [추가]
+    params.set('seriesSort', state.seriesSort || 'asc');
   }
   
   const newUrl = `${location.pathname}?${params.toString()}`;
@@ -183,7 +184,6 @@ function buildQueryByState(state) {
 
   if (state.seriesKey) {
     constraints.push(where('seriesKey', '==', state.seriesKey));
-    // [수정] 시리즈 보기 시, 상태에 따라 정렬 방향 결정
     constraints.push(orderBy('episode', state.seriesSort || 'asc'));
     return query(q, ...constraints);
   }
@@ -237,10 +237,9 @@ async function loadList(isNewQuery = false) {
 
   const filteredItems = filterItemsClientSide(items);
 
-  renderList(filteredItems, isNewQuery);
-  updateStatus(filteredItems.length);
+  renderList(filteredItems);
+  updateStatus();
 
-  // [추가] 시리즈 헤더 렌더링
   if (isNewQuery && currentState.seriesKey && items.length > 0) {
       renderSeriesHeader(items[0].seriesTitle, items.length);
   } else if (!currentState.seriesKey) {
@@ -259,7 +258,6 @@ function filterItemsClientSide(items) {
     return result;
 }
 
-// [수정] 카드 렌더링 함수: style.css 구조에 맞게 수정
 function renderList(items) {
   const frag = document.createDocumentFragment();
   items.forEach(item => {
@@ -288,7 +286,6 @@ function renderList(items) {
   $cards.appendChild(frag);
 }
 
-// [추가] 시리즈 헤더 렌더링 및 이벤트 바인딩 함수
 function renderSeriesHeader(title, count) {
     $seriesHeader.innerHTML = `
         <div>
