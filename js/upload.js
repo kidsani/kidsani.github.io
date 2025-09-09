@@ -35,13 +35,47 @@ const btnNick    = $('#btnNick');
 function openDropdown(){ dropdown?.classList.remove('hidden'); requestAnimationFrame(()=> dropdown?.classList.add('show')); }
 function closeDropdown(){ dropdown?.classList.remove('show'); setTimeout(()=> dropdown?.classList.add('hidden'), 180); }
 
-onAuthStateChanged(auth, (user)=>{
-  const loggedIn = !!user;
-  signupLink?.classList.toggle('hidden', loggedIn);
-  signinLink?.classList.toggle('hidden', loggedIn);
-  if (welcome) welcome.textContent = loggedIn ? `Welcome! ${user.displayName||'회원'}` : '';
-  closeDropdown();
-});
+// ===== DOM Ready 이후에만 초기화 =====
+let catsBox; // 전역 참조
+
+function boot() {
+  // DOM Element 확보
+  catsBox = document.querySelector('#cats');
+  if (!catsBox) {
+    setMsg('#cats 컨테이너가 없습니다.'); 
+    return;
+  }
+
+  // Auth UI 토글 (기존 로직 그대로 이동)
+  onAuthStateChanged(auth, (user) => {
+    const loggedIn = !!user;
+    const $ = (s)=>document.querySelector(s);
+    const signupLink = $('#signupLink');
+    const signinLink = $('#signinLink');
+    const welcome    = $('#welcome');
+
+    signupLink?.classList.toggle('hidden', loggedIn);
+    signinLink?.classList.toggle('hidden', loggedIn);
+    if (welcome) welcome.textContent = loggedIn ? `Welcome! ${user.displayName || '회원'}` : '';
+    // 드롭다운 닫기 함수가 있다면 필요 시 호출
+    try { if (typeof closeDropdown === 'function') closeDropdown(); } catch {}
+  });
+
+  // 카테고리 렌더 (기존 renderCats() 호출을 여기로 이동)
+  renderCats();
+
+  // 등록 버튼 핸들러 (기존 addEventListener 두 줄을 여기로 이동)
+  document.querySelector('#btnSubmitTop')?.addEventListener('click', submitAll);
+  document.querySelector('#btnSubmitBottom')?.addEventListener('click', submitAll);
+}
+
+// DOMContentLoaded 후에 실행
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
+
 menuBtn?.addEventListener('click',(e)=>{ e.stopPropagation(); dropdown?.classList.contains('hidden') ? openDropdown() : closeDropdown(); });
 document.addEventListener('pointerdown',(e)=>{ if(dropdown?.classList.contains('hidden')) return; if(!e.target.closest('#dropdownMenu,#menuBtn')) closeDropdown(); }, true);
 document.addEventListener('keydown',(e)=>{ if(e.key==='Escape') closeDropdown(); });
