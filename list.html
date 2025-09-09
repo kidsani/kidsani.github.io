@@ -78,6 +78,9 @@
     @keyframes pageSlideRight{ from{ transform:translateX(0); opacity:1; } to{ transform:translateX(22%); opacity:.92; } }
     :root.slide-out-right body{ animation:pageSlideRight .26s ease forwards; }
     @media (prefers-reduced-motion:reduce){ :root.slide-out-right body{ animation:none; } }
+  /* list.html의 <style> 또는 style.css 맨 아래에 추가 */
+main { touch-action: pan-y; }  /* 수직 스크롤은 브라우저에 맡기고, 수평 제스처는 우리가 처리 */
+
   </style>
 </head>
 <body>
