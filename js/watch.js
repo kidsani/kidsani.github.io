@@ -142,13 +142,46 @@ async function fetchFirstByCats(catsList){
 /* ─────────────────────────────
  * Boot
  * ───────────────────────────── */
-window.onYouTubeIframeAPIReady = () => {
+// --- YouTube IFrame API 부트스트랩 (안전판) ---
+// 어떤 로드 순서에서도 boot()가 반드시 한 번만 호출되도록 처리
+let __bootStarted = false;
+function safeBoot() {
+  if (__bootStarted) return;
+  __bootStarted = true;
   boot().catch(err=>{
     console.error(err);
-    showError("영상을 불러오지 못했습니다. 선택 카테고리의 영상이 없거나 인덱스가 준비되지 않았을 수 있어요.");
+    try { document.getElementById("v-title").textContent = "영상을 불러오지 못했습니다."; } catch {}
     setTimeout(()=> location.href="list.html", 1200);
   });
-};
+}
+
+function initYouTubeBootstrap() {
+  // 1) API가 이미 로드되어 있으면 즉시
+  if (window.YT && typeof YT.Player === "function") {
+    safeBoot();
+    return;
+  }
+  // 2) YT.ready 지원 시(이미/곧 준비) – 두 경우 모두 안전
+  if (window.YT && typeof YT.ready === "function") {
+    YT.ready(safeBoot);
+  }
+  // 3) 전통 콜백(스크립트가 나중에 로드될 때)
+  window.onYouTubeIframeAPIReady = safeBoot;
+
+  // 4) 최후의 수단: 폴링 (일부 브라우저 캐싱/모듈 순서 꼬임 대비)
+  const iv = setInterval(()=>{
+    if (window.YT && typeof YT.Player === "function") {
+      clearInterval(iv);
+      safeBoot();
+    }
+  }, 120);
+  // 6초 타임아웃 후 중지
+  setTimeout(()=> clearInterval(iv), 6000);
+}
+
+// 모듈 로딩 시점에 초기화
+initYouTubeBootstrap();
+
 
 async function boot(){
   // 1) 파라미터 해석 → vDoc / ytId 준비
