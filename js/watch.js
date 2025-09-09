@@ -283,7 +283,7 @@ let CAT_FILTER = resolveCatFilter();
 
 function matchesFilter(data){
   if(!CAT_FILTER) return true;
-  const cats = Array.isArray(data?.categories) ? data.categories : [];
+  const cats = Array.isArray(data?.cats) ? data.cats : [];
   for(const v of cats){ if(CAT_FILTER.has(v)) return true; }
   return false;
 }
@@ -355,7 +355,7 @@ async function loadMoreCommon(initial=false){
     }
     else if(filterSize <= 10){
       const whereVals = Array.from(CAT_FILTER);
-      const parts=[ where("categories","array-contains-any", whereVals), orderBy("createdAt","desc") ];
+      const parts=[ where("cats","array-contains-any", whereVals), orderBy("createdAt","desc") ];
       if(lastDoc) parts.push(startAfter(lastDoc));
       parts.push(limit(PAGE_SIZE));
       const snap = await getDocs(query(base, ...parts));
