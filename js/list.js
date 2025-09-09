@@ -109,6 +109,40 @@ function setStatus(t){ if($msg) $msg.textContent = t||''; }
 function toggleMore(show){ if($btnMore) $btnMore.style.display = show ? '' : 'none'; }
 function updateSortBtn(){ if(!$btnSort) return; $btnSort.textContent = (orderDir==='asc' ? '오름차순' : '내림차순'); $btnSort.title='정렬 방향 전환(오름/내림)'; }
 
+// === 선택 카테고리 읽기 (index/watch와 동일 규칙) ===
+function parseCatsFromQuery(){
+  try{
+    const p = new URL(location.href).searchParams.get('cats');
+    if(!p) return null;
+    const arr = p.split(',').map(s=>s.trim()).filter(Boolean);
+    return arr.length ? arr : null;
+  }catch{ return null; }
+}
+function getSelectedCats(){
+  const fromUrl = parseCatsFromQuery();
+  if (fromUrl) return fromUrl;
+  try{ return JSON.parse(localStorage.getItem('selectedCats')||'null'); }catch{ return "ALL"; }
+}
+// 개인자료 제외 + 빈 배열이면 null
+function resolveCatFilter(){
+  const sel = getSelectedCats();
+  if (sel==="ALL" || !sel) return null;
+  if (Array.isArray(sel) && sel.length){
+    const filtered = sel.filter(v=> v!=='personal1' && v!=='personal2');
+    return filtered.length ? new Set(filtered) : null;
+  }
+  return null;
+}
+let CAT_FILTER = resolveCatFilter();
+
+function matchesFilter(data){
+  if(!CAT_FILTER) return true;
+  const cats = Array.isArray(data?.cats) ? data.cats
+              : Array.isArray(data?.categories) ? data.categories : [];
+  for(const v of cats){ if(CAT_FILTER.has(v)) return true; }
+  return false;
+}
+
 /* ---------- Firestore 로드 ---------- */
 async function loadPage(){
   if(isLoading || !hasMore) return false;
@@ -116,25 +150,88 @@ async function loadPage(){
   setStatus(allDocs.length ? `총 ${allDocs.length}개 불러옴 · 더 불러오는 중…` : '불러오는 중…');
 
   try{
-    const parts = [ orderBy(orderField, orderDir) ];
+    const base = collection(db,'videos');
+    const parts = [];
+
+    // 정렬 필드/방향
+    parts.push(orderBy(orderField, orderDir));
     if (lastDoc) parts.push(startAfter(lastDoc));
     parts.push(limit(PAGE_SIZE));
-    const snap = await getDocs(query(collection(db,'videos'), ...parts));
 
-    if(snap.empty){
-      hasMore=false; toggleMore(false);
-      setStatus(allDocs.length ? `총 ${allDocs.length}개` : '등록된 영상이 없습니다.');
-      isLoading=false; return false;
+    // 카테고리 필터(≤10개면 서버 필터)
+    const filterSize = CAT_FILTER ? CAT_FILTER.size : 0;
+    let snap;
+
+    if (!CAT_FILTER) {
+      snap = await getDocs(query(base, ...parts));
+    } else if (filterSize <= 10) {
+      const whereVals = Array.from(CAT_FILTER);
+      // cats 필드 고정
+      snap = await getDocs(query(base, /* where 먼저 */ 
+        // Firestore는 orderBy보다 where가 먼저여도 됩니다(여기선 query(...) 안에서 순서 무관).
+        // 다만 UI상 가독을 위해 분리하지 않고 parts에 얹지 않고 같이 넘깁니다.
+        // createdAt/title 정렬 인덱스 필요할 수 있음.
+        // @ts-ignore
+        where('cats','array-contains-any', whereVals),
+        orderBy(orderField, orderDir),
+        ...(lastDoc ? [startAfter(lastDoc)] : []),
+        limit(PAGE_SIZE)
+      ));
+    } else {
+      // >10개: 서버 where가 불가 → 최신 페이지를 몇 번 스캔하며 클라 필터
+      const MAX_SCAN_PAGES = 6; // 과도한 스캔 방지(원하면 12로 올리세요)
+      let appended = 0;
+      let scanned = 0;
+      let localLast = lastDoc;
+      let reachedEnd = false;
+
+      while(appended < PAGE_SIZE && !reachedEnd && scanned < MAX_SCAN_PAGES){
+        const snap2 = await getDocs(query(
+          base, orderBy(orderField, orderDir),
+          ...(localLast ? [startAfter(localLast)] : []),
+          limit(PAGE_SIZE)
+        ));
+        if (snap2.empty){ reachedEnd=true; break; }
+
+        const batch = [];
+        snap2.docs.forEach(d=>{
+          const data = d.data();
+          if(matchesFilter(data)) batch.push({id:d.id, data});
+          localLast = d;
+        });
+
+        // 추가
+        allDocs = allDocs.concat(batch);
+        appended += batch.length;
+        scanned  += 1;
+        if (snap2.size < PAGE_SIZE) reachedEnd = true;
+        lastDoc = localLast || lastDoc;
+      }
+
+      render();
+      toggleMore(!reachedEnd);
+      setStatus(`총 ${allDocs.length}개`);
+      isLoading=false; return true;
     }
-    const batch = snap.docs.map(d => ({ id:d.id, data:d.data() }));
-    allDocs = allDocs.concat(batch);
-    lastDoc = snap.docs[snap.docs.length-1] || lastDoc;
-    if (snap.size < PAGE_SIZE) hasMore=false;
 
-    render();
-    toggleMore(hasMore);
-    setStatus(`총 ${allDocs.length}개`);
-    isLoading=false; return true;
+    if(snap){
+      if(snap.empty){
+        hasMore=false; toggleMore(false);
+        setStatus(allDocs.length ? `총 ${allDocs.length}개` : '등록된 영상이 없습니다.');
+        isLoading=false; return false;
+      }
+      let batch = snap.docs.map(d => ({ id:d.id, data:d.data() }));
+      // 서버 where를 못 쓴 경우 대비(혹시 모를 혼합 케이스)
+      if (CAT_FILTER && filterSize > 10) batch = batch.filter(x=> matchesFilter(x.data));
+      allDocs = allDocs.concat(batch);
+      lastDoc = snap.docs[snap.docs.length-1] || lastDoc;
+      if (snap.size < PAGE_SIZE) hasMore=false;
+
+      render();
+      toggleMore(hasMore);
+      setStatus(`총 ${allDocs.length}개`);
+      isLoading=false; return true;
+    }
   }catch(e){
     console.error('[list] load failed:', e);
     setStatus('목록을 불러오지 못했습니다.');
@@ -142,6 +239,7 @@ async function loadPage(){
     isLoading=false; return false;
   }
 }
+
 
 /* ---------- 검색(클라 필터) ---------- */
 function filtered(){
