@@ -309,6 +309,8 @@ applySavedSelection();
 
 cbToggleAll?.addEventListener('change', ()=> selectAll(!!cbToggleAll.checked));
 
+// ...상단 동일...
+
 /* ---------- go watch ---------- */
 btnWatch?.addEventListener('click', ()=>{
   sessionStorage.removeItem('playQueue'); sessionStorage.removeItem('playIndex');
@@ -317,7 +319,7 @@ btnWatch?.addEventListener('click', ()=>{
   const personals = selected.filter(isPersonalVal);
   const normals   = selected.filter(v=> !isPersonalVal(v));
 
-  // 시리즈 단독
+  // 시리즈 단독 (개인자료 단독)
   if (personals.length === 1 && normals.length === 0){
     localStorage.setItem('selectedCats', JSON.stringify(personals));
     localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
@@ -325,13 +327,21 @@ btnWatch?.addEventListener('click', ()=>{
     return;
   }
 
-  // 일반
+  // 일반: 선택 없으면 ALL, 있으면 그 목록
   const isAll = computeAllSelected();
   const valueToSave = (normals.length===0 || isAll) ? "ALL" : normals;
   localStorage.setItem('selectedCats', JSON.stringify(valueToSave));
   localStorage.setItem('autonext', cbAutoNext?.checked ? '1' : '0');
-  location.href = 'watch.html';
+
+  // 여기서 직접 watch로 이동(설정 페이지 없어도 통과)
+  if (valueToSave === "ALL"){
+    location.href = 'watch.html?cats=ALL';
+  } else {
+    const q = Array.isArray(valueToSave) ? valueToSave.join(',') : String(valueToSave);
+    location.href = `watch.html?cats=${encodeURIComponent(q)}`;
+  }
 });
+
 
 catTitleBtn?.addEventListener('click', ()=> location.href='category-order.html');
 
