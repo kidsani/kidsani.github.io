@@ -7,7 +7,7 @@ import { auth, db } from './firebase-init.js?v=0.1.0';
 import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.1';
 import { CATEGORY_GROUPS } from './categories.js?v=0.2.1';
 import {
-  collection, query, orderBy, limit, startAfter, getDocs
+  collection, query, where, orderBy, limit, startAfter, getDocs
 } from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
 
 /* ---------- 상단바 ---------- */
