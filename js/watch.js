@@ -1,57 +1,52 @@
-// js/watch.js (KidsAni Watch v0.4.0)
-// 요구사항: 로그인 없이 읽기 가능, 시리즈 이전/다음, 자동다음, 위치복원, 화면잠금, 웨이크락, 가로전체화면 시도
+// js/watch.js — KidsAni Watch v0.7.0 (FULL)
+// ✅ 지원 파라미터: ?id=<docId> | ?v=<YouTubeID|URL> | ?cats=ALL | a,b,c
+// ✅ 기능: 위치저장/복원, 자동다음, 이전/다음 화, 웨이크락, 가로전체화면 시도, 화면잠금,
+//         단축키(K/J/L/M/[,], , .), 배속/음소거, 다음 화 미리보기(썸네일),
+//         환경설정(pref_*), 시리즈 정렬 기준(seriesSortPrefs) 반영
 
 import { db } from "./firebase-init.js";
-
-// Firestore SDK (필요 모듈만 개별 임포트)
 import {
   doc, getDoc, collection, query, where, orderBy, limit, getDocs
 } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
 
-/* ───────────── 유틸 ───────────── */
-const $ = (s) => document.querySelector(s);
+/* ─────────────────────────────
+ * Storage Keys / Prefs
+ * ───────────────────────────── */
+const KEY_AUTONEXT = "autonext";                 // "1"/"0"
+const KEY_LAST_WATCH = "lastWatch";              // {videoId,title,seriesKey,episode,docId,at}
+const KEY_SERIES_PREFS = "seriesSortPrefs";      // { [catValue]: "registered"|"latest"|"title" }
+const KEY_SPEED = "pref_speed";                  // number (e.g., 1, 1.25)
+const KEY_PREF_FS = "pref_fullscreenOnStart";    // "1"/"0"
+const KEY_PREF_LOCK = "pref_lockOnStart";        // "1"/"0"
+const KEY_PREF_MUTE = "pref_muteOnStart";        // "1"/"0"
+const KEY_PREF_SWIPE = "pref_swipeNav";          // "1"/"0"
+
+/* ─────────────────────────────
+ * DOM helpers / Params
+ * ───────────────────────────── */
+const $ = (s)=> document.querySelector(s);
+const $$ = (s)=> Array.from(document.querySelectorAll(s));
 const params = new URLSearchParams(location.search);
-// 진입 방식 1) ?id=<videos/{id} 문서ID>  2) ?v=<YouTubeID>
-const docId = params.get("id");
-const ytvFromParam = params.get("v")?.trim() || null;
+const docIdParam = params.get("id");
+const vParam = params.get("v")?.trim() || null;
+const catsParam = params.get("cats") || null;
 
-function extractYouTubeId(urlOrId) {
-  if (!urlOrId) return null;
-  // 이미 ID 형태면(11자 가정) 그대로 사용
-  const idLike = urlOrId.match(/^[a-zA-Z0-9_-]{11}$/);
-  if (idLike) return idLike[0];
-
-  // URL에서 추출
-  const m =
-    urlOrId.match(/[?&]v=([^&#]+)/) || // youtu.be 제외 일반 URL
-    urlOrId.match(/youtu\.be\/([^?&#]+)/) ||
-    urlOrId.match(/embed\/([^?&#]+)/);
-  return m ? m[1] : null;
-}
-
-function saveLastWatch({ videoId, title, seriesKey, episode, docId }) {
-  const data = { videoId, title, seriesKey: seriesKey || null, episode: episode ?? null, docId: docId || null, at: Date.now() };
-  localStorage.setItem("lastWatch", JSON.stringify(data));
-}
-
-function getAutoNextDefault() {
-  const s = localStorage.getItem("autonext");
-  return s === null ? true : s === "true";
-}
-
-function setAutoNext(val) {
-  localStorage.setItem("autonext", String(val));
-}
-
-/* ────────── 상태 ────────── */
+/* ─────────────────────────────
+ * State
+ * ───────────────────────────── */
 let player = null;
 let ytId = null;
-let vDoc = null;           // Firestore 비디오 문서 데이터
-let vRefId = null;         // Firestore 문서 ID
+let vDoc = null;     // 현재 영상 문서 데이터
+let vRefId = null;   // 현재 문서 ID
 let wakeLock = null;
 let lockOn = false;
+let firstGestureUsed = false; // 첫 사용자 제스처로 전체화면/가로잠금 시도
+let resumeTimer = null;
+let saveTimer = null;
 
-/* ────────── DOM ────────── */
+/* ─────────────────────────────
+ * DOM refs
+ * ───────────────────────────── */
 const elTitle = $("#v-title");
 const elSeries = $("#v-series");
 const elChips = $("#v-chips");
@@ -65,47 +60,137 @@ const elSpeed = $("#btn-speed");
 const elLockLayer = $("#lock");
 const elNextPreview = $("#next-preview");
 
-/* ────────── YouTube API ────────── */
-// onYouTubeIframeAPIReady 전역 훅 필요: window에 심는다.
+/* ─────────────────────────────
+ * Utils
+ * ───────────────────────────── */
+function getBool(key, def=false){
+  const s = (localStorage.getItem(key)||"").toLowerCase();
+  if (s==="1"||s==="true"||s==="on") return true;
+  if (s==="0"||s==="false"||s==="off") return false;
+  return def;
+}
+function setBool(key, v){ localStorage.setItem(key, v ? "1" : "0"); }
+
+function extractYouTubeId(input){
+  if (!input) return null;
+  const idLike = input.match(/^[a-zA-Z0-9_-]{11}$/);
+  if (idLike) return idLike[0];
+  const m = input.match(/[?&]v=([^&#]+)/) ||
+            input.match(/youtu\.be\/([^?&#]+)/) ||
+            input.match(/embed\/([^?&#]+)/);
+  return m ? m[1] : null;
+}
+
+function posKeyFor(yt){ return `watchpos:${yt}`; }
+function saveLastWatch({ videoId, title, seriesKey, episode, docId }){
+  const data = { videoId, title, seriesKey: seriesKey||null, episode: episode??null, docId: docId||null, at: Date.now() };
+  localStorage.setItem(KEY_LAST_WATCH, JSON.stringify(data));
+}
+
+function loadSeriesPrefs(){
+  try { return JSON.parse(localStorage.getItem(KEY_SERIES_PREFS)||'{}'); }
+  catch { return {}; }
+}
+function normalizeMode(m){
+  return (m==="latest"||m==="title"||m==="registered") ? m : "registered";
+}
+function modeToOrder(mode){
+  switch(normalizeMode(mode)){
+    case "title":      return { field: "title",       dir: "asc"  };
+    case "latest":     return { field: "seriesSortAt",dir: "asc"  };
+    case "registered":
+    default:           return { field: "createdAt",   dir: "desc" };
+  }
+}
+function firstOf(arr){ return Array.isArray(arr) && arr.length ? arr[0] : null; }
+
+/* ─────────────────────────────
+ * Firestore fetching
+ * ───────────────────────────── */
+async function fetchDocById(id){
+  const snap = await getDoc(doc(db,"videos",id));
+  if (!snap.exists()) throw new Error("영상 문서를 찾을 수 없습니다.");
+  return { id: snap.id, ...snap.data() };
+}
+
+async function fetchNewestAny(){
+  const qAll = query(collection(db,"videos"), orderBy("createdAt","desc"), limit(1));
+  const s = await getDocs(qAll);
+  let obj = null; s.forEach(d=> obj = { id:d.id, ...d.data() });
+  return obj;
+}
+
+async function fetchFirstByCats(catsList){
+  // 대표 카테고리의 모드로 정렬
+  const prefs = loadSeriesPrefs();
+  const rep = firstOf(catsList);
+  const mode = rep && prefs[rep] ? prefs[rep] : "registered";
+  const { field, dir } = modeToOrder(mode);
+
+  // array-contains-any 로 첫 1건
+  const q1 = query(
+    collection(db,"videos"),
+    where("cats","array-contains-any", catsList),
+    orderBy(field, dir),
+    limit(1)
+  );
+  const s = await getDocs(q1);
+  let obj = null; s.forEach(d=> obj = { id:d.id, ...d.data() });
+  return obj;
+}
+
+/* ─────────────────────────────
+ * Boot
+ * ───────────────────────────── */
 window.onYouTubeIframeAPIReady = () => {
-  boot().catch(console.error);
+  boot().catch(err=>{
+    console.error(err);
+    showError("영상을 불러오지 못했습니다. 선택 카테고리의 영상이 없거나 인덱스가 준비되지 않았을 수 있어요.");
+    setTimeout(()=> location.href="list.html", 1200);
+  });
 };
 
-async function boot() {
-  // 1) 문서/파라미터 로드
-  if (docId) {
-    const snap = await getDoc(doc(db, "videos", docId));
-    if (!snap.exists()) throw new Error("영상 문서를 찾을 수 없습니다.");
-    vDoc = snap.data();
-    vRefId = snap.id;
-    ytId = extractYouTubeId(vDoc.url);
-  } else if (ytvFromParam) {
-    ytId = extractYouTubeId(ytvFromParam);
-    vDoc = {
-      title: "(단일 재생) YouTube",
-      cats: [],
-      seriesKey: null, seriesTitle: null, episode: null
-    };
+async function boot(){
+  // 1) 파라미터 해석 → vDoc / ytId 준비
+  if (docIdParam){
+    const d = await fetchDocById(docIdParam);
+    vDoc = d; vRefId = d.id; ytId = extractYouTubeId(d.url);
+  } else if (vParam){
+    ytId = extractYouTubeId(vParam);
+    vDoc = { title:"(단일 재생) YouTube", cats:[], seriesKey:null, seriesTitle:null, episode:null };
+  } else if (catsParam){
+    const val = catsParam.trim();
+    if (val.toUpperCase() === "ALL"){
+      const d = await fetchNewestAny();
+      if (!d) throw new Error("등록된 영상이 없습니다.");
+      vDoc = d; vRefId = d.id; ytId = extractYouTubeId(d.url);
+    } else {
+      const catsList = val.split(",").map(s=>s.trim()).filter(Boolean);
+      if (!catsList.length) throw new Error("유효한 카테고리가 없습니다.");
+      const d = await fetchFirstByCats(catsList);
+      if (!d) throw new Error("선택한 카테고리에 해당하는 영상이 없습니다.");
+      vDoc = d; vRefId = d.id; ytId = extractYouTubeId(d.url);
+    }
   } else {
-    throw new Error("watch 페이지 진입 파라미터가 없습니다. (?id=문서ID 또는 ?v=YouTubeID)");
+    throw new Error("watch 진입 파라미터가 없습니다. (?id= / ?v= / ?cats=)");
   }
 
   if (!ytId) throw new Error("유효한 YouTube ID를 추출하지 못했습니다.");
 
-  // 2) 메타 표시
+  // 2) 메타 렌더
   renderMeta();
 
-  // 3) 다음/이전 화 상태 확인
+  // 3) 이전/다음 화 탐색 및 미리보기 준비
   await prepareSeriesNav();
 
   // 4) 플레이어 생성
   createPlayer(ytId);
 
-  // 5) 자동다음 설정 동기화
-  elAuto.checked = getAutoNextDefault();
-  elAuto.addEventListener("change", () => setAutoNext(elAuto.checked));
+  // 5) 자동다음 토글
+  elAuto.checked = getBool(KEY_AUTONEXT, true);
+  elAuto.addEventListener("change", ()=> setBool(KEY_AUTONEXT, elAuto.checked));
 
-  // 6) 컨트롤 이벤트
+  // 6) 컨트롤 배선
   wireControls();
 
   // 7) lastWatch 기록
@@ -116,22 +201,25 @@ async function boot() {
     episode: vDoc?.episode ?? null,
     docId: vRefId || null,
   });
+
+  // 8) 첫 제스처 포착해서 전체화면/가로잠금 시도 (옵션)
+  setupFirstGestureFullscreen();
 }
 
-function renderMeta() {
+/* ─────────────────────────────
+ * Render / Meta
+ * ───────────────────────────── */
+function renderMeta(){
   elTitle.textContent = vDoc?.title || "(제목 없음)";
-  const seriesKey = vDoc?.seriesKey || null;
-  if (seriesKey) {
-    const epi = vDoc?.episode ?? "?";
-    const st = vDoc?.seriesTitle || "시리즈";
-    elSeries.textContent = `${st} · ${epi}화`;
+  if (vDoc?.seriesKey && typeof vDoc?.episode === "number"){
+    const st = vDoc.seriesTitle || "시리즈";
+    elSeries.textContent = `${st} · ${vDoc.episode}화`;
   } else {
     elSeries.textContent = "시리즈 정보 없음";
   }
 
   elChips.innerHTML = "";
-  const cats = Array.isArray(vDoc?.cats) ? vDoc.cats : [];
-  cats.forEach(c => {
+  (Array.isArray(vDoc?.cats) ? vDoc.cats : []).forEach(c=>{
     const span = document.createElement("span");
     span.className = "chip";
     span.textContent = c;
@@ -139,262 +227,323 @@ function renderMeta() {
   });
 }
 
-async function prepareSeriesNav() {
-  elPrev.disabled = true;
-  elNext.disabled = true;
+/* ─────────────────────────────
+ * Series Prev/Next + Preview
+ * ───────────────────────────── */
+async function prepareSeriesNav(){
+  elPrev.disabled = true; elNext.disabled = true;
+  elPrev.onclick = null;   elNext.onclick = null;
   elNextPreview.textContent = "";
 
   if (!vDoc?.seriesKey || typeof vDoc?.episode !== "number") return;
 
-  const seriesKey = vDoc.seriesKey;
-  const epi = vDoc.episode;
+  const k = vDoc.seriesKey, ep = vDoc.episode;
 
-  // 다음 화
   const qNext = query(
-    collection(db, "videos"),
-    where("seriesKey", "==", seriesKey),
-    where("episode", ">", epi),
-    orderBy("episode", "asc"),
+    collection(db,"videos"),
+    where("seriesKey","==",k),
+    where("episode",">",ep),
+    orderBy("episode","asc"),
     limit(1)
   );
-  const nextSnap = await getDocs(qNext);
-  let nextDoc = null;
-  nextSnap.forEach(d => { nextDoc = { id: d.id, ...d.data() }; });
-
-  // 이전 화
   const qPrev = query(
-    collection(db, "videos"),
-    where("seriesKey", "==", seriesKey),
-    where("episode", "<", epi),
-    orderBy("episode", "desc"),
+    collection(db,"videos"),
+    where("seriesKey","==",k),
+    where("episode","<",ep),
+    orderBy("episode","desc"),
     limit(1)
   );
-  const prevSnap = await getDocs(qPrev);
-  let prevDoc = null;
-  prevSnap.forEach(d => { prevDoc = { id: d.id, ...d.data() }; });
 
-  if (prevDoc) {
+  const [ns, ps] = await Promise.all([getDocs(qNext), getDocs(qPrev)]);
+  let nextDoc = null, prevDoc = null;
+  ns.forEach(d=> nextDoc = { id:d.id, ...d.data() });
+  ps.forEach(d=> prevDoc = { id:d.id, ...d.data() });
+
+  if (prevDoc){
     elPrev.disabled = false;
-    elPrev.onclick = () => toDoc(prevDoc.id);
-  } else {
-    elPrev.disabled = true;
-    elPrev.onclick = null;
+    elPrev.onclick = ()=> toDoc(prevDoc.id);
   }
-
-  if (nextDoc) {
+  if (nextDoc){
     elNext.disabled = false;
-    elNext.onclick = () => toDoc(nextDoc.id);
-    const previewTitle = nextDoc.title || "다음 화";
-    elNextPreview.textContent = `다음 화: ${previewTitle}`;
-  } else {
-    elNext.disabled = true;
-    elNext.onclick = null;
+    elNext.onclick = ()=> toDoc(nextDoc.id);
+    const title = nextDoc.title || "다음 화";
+    elNextPreview.innerHTML = "";
+    const wrap = document.createElement("div");
+    const tid = extractYouTubeId(nextDoc.url);
+    const img = tid ? `https://i.ytimg.com/vi/${tid}/hqdefault.jpg` : null;
+    wrap.style.display = "flex";
+    wrap.style.alignItems = "center";
+    wrap.style.gap = "8px";
+
+    if (img){
+      const th = document.createElement("img");
+      th.src = img; th.alt = "다음 화 미리보기"; th.loading = "lazy";
+      th.width = 80; th.height = 45; th.style.borderRadius = "6px";
+      // 프리로드
+      const pre = new Image(); pre.src = img;
+      wrap.appendChild(th);
+    }
+    const t = document.createElement("div");
+    t.textContent = `다음 화: ${title}`;
+    wrap.appendChild(t);
+
+    elNextPreview.appendChild(wrap);
   }
 }
 
-function toDoc(id) {
-  // 동일 페이지 내 전환으로 히스토리 깔끔 유지
+function toDoc(id){
   location.href = `watch.html?id=${encodeURIComponent(id)}`;
 }
 
-/* ────────── 플레이어 ────────── */
-function createPlayer(videoId) {
+/* ─────────────────────────────
+ * YouTube Player
+ * ───────────────────────────── */
+function createPlayer(videoId){
   player = new YT.Player("player", {
     videoId,
-    playerVars: {
-      modestbranding: 1,
-      rel: 0,
-      playsinline: 1,
-      fs: 1,
-    },
-    events: {
-      onReady: onPlayerReady,
-      onStateChange: onPlayerStateChange,
-    }
+    playerVars: { modestbranding:1, rel:0, playsinline:1, fs:1 },
+    events: { onReady: onPlayerReady, onStateChange: onPlayerStateChange }
   });
 }
 
-let resumeTimer = null;
-let saveTimer = null;
-
-function onPlayerReady(e) {
-  // 위치 복원
-  const key = `watchpos:${ytId}`;
+function onPlayerReady(){
+  // 1) 위치 복원
+  const key = posKeyFor(ytId);
   const saved = Number(localStorage.getItem(key) || "0");
-  if (saved > 5) {
-    // 2초 뒤 점프(초기 광고/프리롤 대비)
-    resumeTimer = setTimeout(() => {
-      try {
-        player.seekTo(saved, true);
-      } catch {}
-    }, 2000);
+  if (saved > 5){
+    resumeTimer = setTimeout(()=>{ try{ player.seekTo(saved, true); }catch{} }, 2000);
   }
 
-  // 웨이크락 시도 (재생 시)
-  // 전체화면/가로잠금 시도는 사용자 제스처 버튼에서 수행
+  // 2) 환경설정 적용 (음소거/배속/잠금)
+  if (getBool(KEY_PREF_MUTE, false)){
+    try { player.mute(); } catch {}
+  }
+  const spd = Number(localStorage.getItem(KEY_SPEED) || "0");
+  if (spd && !Number.isNaN(spd)){
+    try {
+      const rates = player.getAvailablePlaybackRates() || [0.75,1,1.25,1.5,1.75,2];
+      if (rates.includes(spd)) {
+        player.setPlaybackRate(spd);
+        elSpeed.textContent = `배속 ${spd.toFixed(2)}×`;
+      }
+    } catch {}
+  }
+  if (getBool(KEY_PREF_LOCK, false)){
+    lockOn = true; elLock.checked = true; elLockLayer.classList.add("active");
+  }
+
+  // 3) 웨이크락은 재생 시작 시 획득
 }
 
-async function requestWakeLock() {
-  try {
-    if ("wakeLock" in navigator) {
-      wakeLock = await navigator.wakeLock.request("screen");
-      wakeLock.addEventListener("release", () => { wakeLock = null; });
-    }
-  } catch {}
-}
-
-function releaseWakeLock() {
-  try {
-    if (wakeLock) { wakeLock.release(); wakeLock = null; }
-  } catch {}
-}
-
-async function tryFullscreenAndLandscape() {
-  const root = document.documentElement;
-  try {
-    if (!document.fullscreenElement) {
-      await root.requestFullscreen();
-    }
-  } catch {}
-  try {
-    if (screen.orientation && screen.orientation.lock) {
-      await screen.orientation.lock("landscape");
-    }
-  } catch {}
-}
-
-function onPlayerStateChange(e) {
-  const state = e.data;
-  // 재생 중: 위치 저장, 웨이크락
-  if (state === YT.PlayerState.PLAYING) {
+async function onPlayerStateChange(e){
+  const s = e.data;
+  if (s === YT.PlayerState.PLAYING){
     requestWakeLock();
-    if (!saveTimer) {
-      saveTimer = setInterval(() => {
+    if (!saveTimer){
+      saveTimer = setInterval(()=>{
         try {
           const t = Math.floor(player.getCurrentTime());
-          localStorage.setItem(`watchpos:${ytId}`, String(t));
+          localStorage.setItem(posKeyFor(ytId), String(t));
         } catch {}
       }, 5000);
     }
-  }
-  // 일시정지: 웨이크락 유지(O), 저장은 계속
-  if (state === YT.PlayerState.PAUSED) {
-    // no-op
-  }
-  // 종료: 자동 다음화
-  if (state === YT.PlayerState.ENDED) {
+  } else if (s === YT.PlayerState.PAUSED){
+    // 유지
+  } else if (s === YT.PlayerState.ENDED){
     releaseWakeLock();
-    clearInterval(saveTimer); saveTimer = null;
-    localStorage.removeItem(`watchpos:${ytId}`); // 다 본 영상은 위치 초기화
+    try { clearInterval(saveTimer); } catch {}
+    saveTimer = null;
+    localStorage.removeItem(posKeyFor(ytId));
 
-    if (elAuto.checked && !elNext.disabled) {
+    if (elAuto.checked && !elNext.disabled){
       elNext.click();
     }
   }
 }
 
-/* ────────── 컨트롤 & 잠금 ────────── */
-function wireControls() {
-  // 자동다음 체크는 boot에서 이미 연결
+/* ─────────────────────────────
+ * Wake Lock / Fullscreen / Orientation
+ * ───────────────────────────── */
+async function requestWakeLock(){
+  try {
+    if ("wakeLock" in navigator){
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", ()=>{ wakeLock = null; });
+    }
+  } catch {}
+}
+function releaseWakeLock(){
+  try { if (wakeLock){ wakeLock.release(); wakeLock = null; } } catch {}
+}
 
-  elLock.addEventListener("change", () => {
+async function tryFullscreenAndLandscape(){
+  const root = document.documentElement;
+  try {
+    if (!document.fullscreenElement) await root.requestFullscreen();
+  } catch {}
+  try {
+    if (screen.orientation && screen.orientation.lock){
+      await screen.orientation.lock("landscape");
+    }
+  } catch {}
+}
+
+function setupFirstGestureFullscreen(){
+  const wantFS = getBool(KEY_PREF_FS, false);
+  if (!wantFS) return;
+
+  const once = async ()=> {
+    if (firstGestureUsed) return;
+    firstGestureUsed = true;
+    document.removeEventListener("pointerdown", once, true);
+    await tryFullscreenAndLandscape();
+    try { player.playVideo(); } catch {}
+  };
+  document.addEventListener("pointerdown", once, true);
+}
+
+/* ─────────────────────────────
+ * Controls / Shortcuts
+ * ───────────────────────────── */
+function wireControls(){
+  // 화면잠금
+  elLock.addEventListener("change", ()=>{
     lockOn = elLock.checked;
     elLockLayer.classList.toggle("active", lockOn);
   });
 
   // 전체화면(사용자 제스처)
-  elFull.addEventListener("click", async () => {
+  elFull.addEventListener("click", async ()=>{
     await tryFullscreenAndLandscape();
-    // 최초 재생도 보장
     try { player.playVideo(); } catch {}
   });
 
   // 음소거
-  elMute.addEventListener("click", () => {
+  elMute.addEventListener("click", ()=>{
     try {
-      const m = player.isMuted();
-      if (m) player.unMute(); else player.mute();
+      player.isMuted() ? player.unMute() : player.mute();
     } catch {}
   });
 
-  // 배속
-  elSpeed.addEventListener("click", () => {
+  // 배속 순환
+  elSpeed.addEventListener("click", ()=>{
     try {
       const cur = player.getPlaybackRate();
-      // 유튜브 지원 속도 목록 중에서 다음 값
-      const rates = player.getAvailablePlaybackRates() || [0.75, 1, 1.25, 1.5, 1.75, 2];
+      const rates = player.getAvailablePlaybackRates() || [0.75,1,1.25,1.5,1.75,2];
       const idx = rates.indexOf(cur);
       const next = rates[(idx + 1) % rates.length];
       player.setPlaybackRate(next);
       elSpeed.textContent = `배속 ${next.toFixed(2)}×`;
+      localStorage.setItem(KEY_SPEED, String(next));
     } catch {}
   });
 
   // 키보드 단축키
-  window.addEventListener("keydown", (ev) => {
-    if (lockOn) { ev.preventDefault(); return; }
+  window.addEventListener("keydown", (ev)=>{
+    if (lockOn){ ev.preventDefault(); return; }
     try {
-      switch (ev.key) {
-        case "k":
-        case "K":
-          togglePlay(); break;
-        case "j":
-        case "J":
-          seekRel(-10); break;
-        case "l":
-        case "L":
-          seekRel(10); break;
-        case "m":
-        case "M":
-          if (player.isMuted()) player.unMute(); else player.mute(); break;
-        case ",":
-          stepSpeed(-0.25); break;
-        case ".":
-          stepSpeed(0.25); break;
-        case "[":
-          if (!elPrev.disabled) elPrev.click(); break;
-        case "]":
-          if (!elNext.disabled) elNext.click(); break;
+      switch (ev.key){
+        case "k": case "K": togglePlay(); break;
+        case "j": case "J": seekRel(-10); break;
+        case "l": case "L": seekRel(10); break;
+        case "m": case "M": player.isMuted()?player.unMute():player.mute(); break;
+        case ",": stepSpeed(-0.25); break;
+        case ".": stepSpeed(0.25); break;
+        case "[": if (!elPrev.disabled) elPrev.click(); break;
+        case "]": if (!elNext.disabled) elNext.click(); break;
+        case "f": case "F": tryFullscreenAndLandscape(); break;
       }
     } catch {}
-  });
+  }, { passive: true });
 
-  // 잠금 레이어 클릭 막기
-  elLockLayer.addEventListener("click", (e) => {
-    if (lockOn) e.stopPropagation();
-  });
+  // 시리즈 스와이프 내비 (옵션)
+  if (getBool(KEY_PREF_SWIPE, true)){
+    initSwipeForSeries();
+  }
+
+  // 잠금 레이어 터치 차단
+  elLockLayer.addEventListener("click", (e)=>{ if (lockOn) e.stopPropagation(); });
 }
 
-function togglePlay() {
+function togglePlay(){
   const s = player.getPlayerState();
   if (s === YT.PlayerState.PLAYING) player.pauseVideo();
   else player.playVideo();
 }
-
-function seekRel(dt) {
+function seekRel(dt){
   const t = player.getCurrentTime();
   player.seekTo(Math.max(0, t + dt), true);
 }
-
-function stepSpeed(dv) {
-  const cur = player.getPlaybackRate();
-  let next = Math.max(0.25, Math.min(2, (Math.round((cur + dv)*100)/100)));
-  player.setPlaybackRate(next);
-  elSpeed.textContent = `배속 ${next.toFixed(2)}×`;
+function stepSpeed(dv){
+  try {
+    const cur = player.getPlaybackRate();
+    let nx = Math.max(0.25, Math.min(2, (Math.round((cur + dv) * 100) / 100)));
+    player.setPlaybackRate(nx);
+    elSpeed.textContent = `배속 ${nx.toFixed(2)}×`;
+    localStorage.setItem(KEY_SPEED, String(nx));
+  } catch {}
 }
 
-/* ────────── 정리 ────────── */
-window.addEventListener("beforeunload", () => {
+/* ─────────────────────────────
+ * Swipe (Prev/Next in series)
+ * ───────────────────────────── */
+function initSwipeForSeries(){
+  if (!("ontouchstart" in window)) return;    // 모바일만
+  let sx=0, sy=0, t0=0, tracking=false;
+  const THX = 80, MAXY = 80, MAXT = 700;
+  const getPt = (e)=> e.touches?.[0] || e;
+
+  function start(e){
+    const p = getPt(e); if(!p) return;
+    sx = p.clientX; sy = p.clientY; t0 = Date.now(); tracking = true;
+  }
+  function end(e){
+    if(!tracking) return; tracking = false;
+    const p = getPt(e); if(!p) return;
+    const dx = p.clientX - sx, dy = p.clientY - sy, dt = Date.now() - t0;
+    if (Math.abs(dy) > MAXY || dt > MAXT) return;
+    if (dx <= -THX && !elNext.disabled) elNext.click();
+    if (dx >=  THX && !elPrev.disabled) elPrev.click();
+  }
+  document.addEventListener("touchstart", start, { passive: true });
+  document.addEventListener("touchend",   end,   { passive: true });
+}
+
+/* ─────────────────────────────
+ * Error / Cleanup
+ * ───────────────────────────── */
+function showError(msg){
+  try { elTitle.textContent = msg; } catch {}
+  try { elSeries.textContent = "문제 발생"; } catch {}
+}
+window.addEventListener("beforeunload", ()=>{
   try { clearInterval(saveTimer); } catch {}
   try { clearTimeout(resumeTimer); } catch {}
   releaseWakeLock();
 });
 
-/* ────────── Firestore 인덱스 안내 ──────────
-시리즈 이전/다음 조회를 위해 아래 조합 색인이 필요할 수 있습니다.
+/* ─────────────────────────────
+ * Firestore Indexes (필수)
+ * ─────────────────────────────
+1) 카테고리 기반 첫 영상:
+   - collection: videos
+   - where: cats array-contains-any
+   - orderBy: createdAt desc
+   → 조합 색인 필요 (에러 콘솔 링크로 생성)
 
-videos: seriesKey == ... , episode asc
-videos: seriesKey == ... , episode desc
+2) 유튜브 업로드순 정렬:
+   - where: cats array-contains-any
+   - orderBy: seriesSortAt asc
+   → 조합 색인 필요
 
-콘솔에서 쿼리 에러 링크로 생성하시면 됩니다.
-──────────────────────────────────────────*/
+3) 제목 가나다순 정렬:
+   - where: cats array-contains-any
+   - orderBy: title asc
+   → 조합 색인 필요
+
+4) 시리즈 이전/다음:
+   - where: seriesKey == ...
+   - where: episode > / <
+   - orderBy: episode asc/desc
+   → 조합 색인 필요
+────────────────────────────────*/
