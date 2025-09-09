@@ -1,375 +1,286 @@
-// js/list.js — Gemini Final Version
-import { auth, db } from './firebase-init.js';
+// js/kidsani-list.js (KidsAni v1.0.0)
+// - 새 로직: 간단하고 견고한 목록 로더
+// - createdAt 기준 정렬(오름/내림 토글), 검색(제목/URL 부분일치), 무한스크롤
+// - 카드 탭 → watch.html 내부 플레이어, playQueue/playIndex 전달
+// - 중앙 10% 데드존 스와이프: 오른쪽으로 스와이프 시 index.html 이동
+
+import { auth, db } from './firebase-init.js?v=0.1.0';
+import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.1';
+import { CATEGORY_GROUPS } from './categories.js?v=0.2.1';
 import {
-  collection, query, where, orderBy, limit, startAfter, getDocs,
-  doc, getDoc, updateDoc, deleteDoc
-} from 'https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js';
-import { onAuthStateChanged } from './auth.js';
-import { CATEGORY_GROUPS } from './categories.js';
-import { bindIndexSwipe } from './swipe-index.js';
+  collection, query, orderBy, limit, startAfter, getDocs
+} from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
 
-// --- 유틸리티 및 상수 ---
-const $ = (sel, root = document) => root.querySelector(sel);
-const PAGE_SIZE = 30;
+/* ---------- 상단바: 최소 동기 ---------- */
+const $ = (s)=>document.querySelector(s);
+const signupLink = $('#signupLink');
+const signinLink = $('#signinLink');
+const welcome    = $('#welcome');
+const menuBtn    = $('#menuBtn');
+const dropdown   = $('#dropdownMenu');
+const btnSignOut = $('#btnSignOut');
+const btnGoUpload= $('#btnGoUpload');
+const btnAbout   = $('#btnAbout');
+const btnList    = $('#btnList');
 
-// --- 상태 관리 객체 ---
-const state = {
-  user: null,
-  isAdmin: false,
-  cat: '',
-  sortField: 'createdAt',
-  sortDir: 'desc',
-  kw: '',
-  items: [],
-  lastDoc: null,
-  loading: false,
-  reachedEnd: false,
-  selectedIds: new Set(),
-  io: null // IntersectionObserver instance
-};
+function openDropdown(){ if(!dropdown)return; dropdown.classList.remove('hidden'); requestAnimationFrame(()=> dropdown.classList.add('show')); }
+function closeDropdown(){ if(!dropdown)return; dropdown.classList.remove('show'); setTimeout(()=> dropdown.classList.add('hidden'), 180); }
 
-// --- 초기화 ---
-document.addEventListener('DOMContentLoaded', init);
+onAuthStateChanged((user)=>{
+  const loggedIn = !!user;
+  signupLink?.classList.toggle('hidden', loggedIn);
+  signinLink?.classList.toggle('hidden', loggedIn);
+  if (welcome) welcome.textContent = loggedIn ? `Welcome! ${user.displayName || '회원'}` : '';
+  closeDropdown();
+});
+menuBtn?.addEventListener('click', (e)=>{ e.stopPropagation(); dropdown?.classList.contains('hidden') ? openDropdown() : closeDropdown(); });
+document.addEventListener('pointerdown', (e)=>{ if(dropdown?.classList.contains('hidden')) return; if(!e.target.closest('#dropdownMenu,#menuBtn')) closeDropdown(); }, true);
+document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeDropdown(); });
+dropdown?.addEventListener('click', (e)=> e.stopPropagation());
+btnSignOut?.addEventListener('click', async ()=>{ if(!auth.currentUser){ location.href='signin.html'; return; } try{ await fbSignOut(auth); }catch{} closeDropdown(); });
+btnGoUpload?.addEventListener('click', ()=>{ location.href='upload.html'; closeDropdown(); });
+btnAbout   ?.addEventListener('click', ()=>{ location.href='about.html'; closeDropdown(); });
+btnList    ?.addEventListener('click', ()=>{ location.href='list.html'; closeDropdown(); });
 
-function init() {
-  // 1. UI 요소 캐싱
-  const elements = {
-    catSelect: $('#catSelect'),
-    sortSelect: $('#sortSelect'),
-    keyword: $('#keyword'),
-    refreshBtn: $('#refreshBtn'),
-    list: $('#list'),
-    empty: $('#empty'),
-    errorBanner: $('#errorBanner'),
-    sentinel: $('#sentinel'),
-    selCount: $('#selCount'),
-    bulkChangeBtn: $('#bulkChangeBtn'),
-    bulkDeleteBtn: $('#bulkDeleteBtn'),
-    catDialog: $('#catDialog'),
-    catDialogBody: $('#catDialogBody'),
-    catSaveBtn: $('#catSaveBtn'),
-  };
+/* ---------- DOM ---------- */
+const $cards     = $('#cards');
+const $msg       = $('#msg');
+const $q         = $('#q');
+const $btnSearch = $('#btnSearch');
+const $btnClear  = $('#btnClear');
+const $btnMore   = $('#btnMore');
+const $btnSort   = $('#btnSort'); // 내림/오름 토글
 
-  // 2. 인증 상태 감시
-  onAuthStateChanged(auth, async (user) => {
-    state.user = user || null;
-    state.isAdmin = user ? await isAdmin(user.uid) : false;
-    syncBulkButtons(elements);
-    resetAndLoad(elements); // 로그인/아웃 시 목록 새로고침
-  });
+/* ---------- 상태 ---------- */
+const PAGE_SIZE = 60;
+let orderDir = (localStorage.getItem('kidsani_list_order') || 'desc'); // 'desc'|'asc'
+let isLoading = false;
+let hasMore   = true;
+let lastDoc   = null;
+let allDocs   = []; // {id, data}
 
-  // 3. UI 및 이벤트 초기화
-  initCategoriesSelect(elements.catSelect);
-  loadPrefs();
-  updateUIToReflectState(elements);
-  bindEvents(elements);
-  bindIndexSwipe(); // 스와이프 기능 활성화
-}
+/* ---------- 보조 ---------- */
+function esc(s=''){ return String(s).replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[m])); }
+function extractYTId(url=''){ const m=String(url).match(/(?:youtu\.be\/|v=|shorts\/|embed\/)([^?&/]+)/); return m?m[1]:''; }
+function toThumb(url){ const id=extractYTId(url); return id?`https://i.ytimg.com/vi/${id}/hqdefault.jpg`:''; }
 
-// --- 이벤트 바인딩 ---
-function bindEvents(elements) {
-  elements.refreshBtn.addEventListener('click', () => resetAndLoad(elements));
-  elements.keyword.addEventListener('input', debounce(() => {
-    state.kw = elements.keyword.value.trim().toLowerCase();
-    savePrefs();
-    applyClientSearch(elements.list);
-  }, 300));
-
-  elements.sortSelect.addEventListener('change', () => {
-    const [field, dir] = elements.sortSelect.value.split('_');
-    state.sortField = field;
-    state.sortDir = dir;
-    savePrefs();
-    resetAndLoad(elements);
-  });
-
-  elements.catSelect.addEventListener('change', () => {
-    state.cat = elements.catSelect.value;
-    savePrefs();
-    resetAndLoad(elements);
-  });
-  
-  // 무한 스크롤
-  state.io = new IntersectionObserver((entries) => {
-    if (entries[0].isIntersecting && !state.loading && !state.reachedEnd) {
-      loadMore(elements);
-    }
-  }, { rootMargin: '200px' });
-  state.io.observe(elements.sentinel);
-
-  // 일괄 작업 버튼
-  elements.bulkChangeBtn.addEventListener('click', () => {
-    if (state.selectedIds.size > 0) openCategoryDialog(elements, [...state.selectedIds]);
-  });
-  elements.bulkDeleteBtn.addEventListener('click', () => {
-    if (state.selectedIds.size > 0) onBulkDelete(elements, [...state.selectedIds]);
-  });
-  elements.catSaveBtn.addEventListener('click', (e) => {
-    e.preventDefault();
-    saveCategoryDialog(elements);
-    elements.catDialog.close();
-  });
-}
-
-// --- 데이터 로딩 및 쿼리 ---
-function buildQuery() {
-  const q = collection(db, 'videos');
-  const constraints = [];
-  if (state.cat) constraints.push(where('cats', 'array-contains', state.cat));
-  constraints.push(orderBy(state.sortField, state.sortDir));
-  if (state.lastDoc) constraints.push(startAfter(state.lastDoc));
-  constraints.push(limit(PAGE_SIZE));
-  return query(q, ...constraints);
-}
-
-async function resetAndLoad(elements) {
-  if (state.loading) return;
-  state.items = [];
-  state.lastDoc = null;
-  state.reachedEnd = false;
-  state.selectedIds.clear();
-  elements.list.innerHTML = '';
-  elements.empty.style.display = 'none';
-  elements.errorBanner.style.display = 'none';
-  syncBulkButtons(elements);
-  await loadMore(elements, true);
-}
-
-async function loadMore(elements, isFirstLoad = false) {
-  if (state.loading || state.reachedEnd) return;
-  state.loading = true;
-
+const LABEL_MAP = (() => {
+  const m = {};
   try {
-    const q = buildQuery();
-    const snapshot = await getDocs(q);
+    CATEGORY_GROUPS.forEach(g => g?.children?.forEach(c => { if (c?.value) m[c.value] = c.label || c.value; }));
+  } catch {}
+  return m;
+})();
+function labelOf(key){ return LABEL_MAP[key] || key; }
 
-    if (snapshot.empty) {
-      state.reachedEnd = true;
-      if (isFirstLoad) elements.empty.style.display = 'block';
-      return;
+function setStatus(t){ if($msg) $msg.textContent = t || ''; }
+function toggleMore(show){ if($btnMore) $btnMore.style.display = show ? '' : 'none'; }
+
+/* ---------- 정렬 토글 초기화 ---------- */
+function updateSortButton(){
+  if(!$btnSort) return;
+  // createdAt 내림차순이 기본 → 버튼 라벨은 현재 상태를 표시
+  $btnSort.textContent = (orderDir==='desc') ? '내림차순' : '오름차순';
+  $btnSort.setAttribute('aria-label', `정렬: ${$btnSort.textContent}`);
+}
+updateSortButton();
+
+$btnSort?.addEventListener('click', async ()=>{
+  orderDir = (orderDir === 'desc') ? 'asc' : 'desc';
+  localStorage.setItem('kidsani_list_order', orderDir);
+  // 상태 리셋 후 재조회
+  allDocs = [];
+  lastDoc = null;
+  hasMore = true;
+  $cards.innerHTML = '';
+  setStatus('정렬 변경: 다시 불러오는 중…');
+  updateSortButton();
+  await loadPage();
+});
+
+/* ---------- Firestore 로드 ---------- */
+async function loadPage(){
+  if(isLoading || !hasMore) return false;
+  isLoading = true;
+  setStatus(allDocs.length ? `총 ${allDocs.length}개 불러옴 · 더 불러오는 중…` : '불러오는 중…');
+
+  try{
+    const parts = [ orderBy('createdAt', orderDir) ];
+    if (lastDoc) parts.push(startAfter(lastDoc));
+    parts.push(limit(PAGE_SIZE));
+    const snap = await getDocs(query(collection(db,'videos'), ...parts));
+
+    if(snap.empty){
+      hasMore = false;
+      toggleMore(false);
+      setStatus(allDocs.length ? `총 ${allDocs.length}개` : '등록된 영상이 없습니다.');
+      isLoading=false;
+      return false;
     }
 
-    state.lastDoc = snapshot.docs[snapshot.docs.length - 1];
-    const newItems = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-    state.items.push(...newItems);
+    const batch = snap.docs.map(d => ({ id:d.id, data:d.data() }));
+    allDocs = allDocs.concat(batch);
+    lastDoc = snap.docs[snap.docs.length-1] || lastDoc;
+    if (snap.size < PAGE_SIZE) hasMore = false;
 
-    renderList(elements, newItems, true);
-    applyClientSearch(elements.list);
-
-  } catch (err) {
-    console.error('[list] 로드 오류:', err);
-    showIndexBanner(elements.errorBanner, err);
-  } finally {
-    state.loading = false;
+    render();
+    toggleMore(hasMore);
+    setStatus(`총 ${allDocs.length}개`);
+    isLoading=false;
+    return true;
+  }catch(e){
+    console.error('[kidsani-list] load failed:', e);
+    setStatus('목록을 불러오지 못했습니다.');
+    toggleMore(false);
+    isLoading=false;
+    return false;
   }
 }
 
-// --- 렌더링 ---
-function renderList(elements, itemsToRender, append = false) {
-  if (!append) elements.list.innerHTML = '';
+/* ---------- 검색(클라 필터) ---------- */
+function filteredDocs(){
+  const q = ($q?.value || '').trim().toLowerCase();
+  if(!q) return allDocs;
+  return allDocs.filter(x=>{
+    const t = String(x.data?.title || '').toLowerCase();
+    const u = String(x.data?.url || '').toLowerCase();
+    return t.includes(q) || u.includes(q);
+  });
+}
+
+/* ---------- 렌더 ---------- */
+function render(){
+  const list = filteredDocs();
+  $cards.innerHTML = '';
+  if (!list.length){
+    $cards.innerHTML = `<div style="padding:14px;border:1px dashed var(--border);border-radius:12px;color:#cfcfcf;">결과가 없습니다.</div>`;
+    return;
+  }
+
   const frag = document.createDocumentFragment();
-  itemsToRender.forEach(item => {
-    frag.appendChild(createItemElement(elements, item));
-  });
-  elements.list.appendChild(frag);
-}
+  for(const x of list){
+    const d       = x.data || {};
+    const title   = d.title || '(제목 없음)';
+    const url     = d.url || '';
+    const catsArr = Array.isArray(d.cats) ? d.cats : (Array.isArray(d.categories) ? d.categories : []);
+    const thumb   = d.thumb || toThumb(url);
+    const nick    = d.uNickname || d.ownerNick || '회원';
 
-function createItemElement(elements, item) {
-  const li = document.createElement('article');
-  li.className = 'item';
-  li.dataset.id = item.id;
+    const chipsHTML = (catsArr||[]).map(v => `<span class="chip" title="${esc(labelOf(v))}">${esc(labelOf(v))}</span>`).join('');
 
-  const canUserEdit = canEdit(item);
-  const chipsHTML = (item.cats || []).map(cat => `<span class="chip">${getCategoryLabel(cat)}</span>`).join('');
-
-  li.innerHTML = `
-    <div class="col-check">
-      <input type="checkbox" data-id="${item.id}" ${!canUserEdit ? 'disabled' : ''}>
-    </div>
-    <div class="col-main">
-      <div class="title" title="${item.title || ''}">${item.title || '(제목 없음)'}</div>
-      <div class="url" title="${item.url || ''}">${item.url || ''}</div>
-      <div class="chips">${chipsHTML}</div>
-      <div class="meta">
-        <span>${item.createdAt?.toDate ? item.createdAt.toDate().toLocaleString('ko-KR') : '-'}</span>
-        ${item.seriesTitle ? `<span class="series-badge">${item.seriesTitle}</span>` : ''}
-        ${typeof item.episode === 'number' ? `<span class="episode-badge">EP ${item.episode}</span>` : ''}
+    const el = document.createElement('article');
+    el.className = 'card';
+    el.setAttribute('data-id', x.id);
+    el.innerHTML = `
+      <div class="card-grid">
+        <div class="card-left">
+          <div class="title" title="${esc(title)}">${esc(title)}</div>
+          <div class="chips">${chipsHTML}</div>
+          <div class="meta">등록: ${esc(nick)}</div>
+        </div>
+        <div class="card-right">
+          <img class="thumb" src="${esc(thumb)}" alt="썸네일" loading="lazy"/>
+        </div>
       </div>
-    </div>
-    <div class="col-side">
-      <img class="thumb" src="${item.thumb || guessThumb(item.url)}" alt="썸네일" loading="lazy">
-    </div>
-  `;
-
-  // [중요] watch.html 연동 및 일괄 선택 이벤트
-  li.addEventListener('click', (e) => {
-    if (e.target.type === 'checkbox') { // 체크박스 클릭
-      const checkbox = e.target;
-      if (checkbox.checked) state.selectedIds.add(item.id);
-      else state.selectedIds.delete(item.id);
-      syncBulkButtons(elements);
-      return;
-    }
-    
-    // 카드 클릭 -> watch.html로 이동 (컨텍스트 저장)
-    const itemIndex = state.items.findIndex(i => i.id === item.id);
-    const itemIds = state.items.map(i => i.id);
-    
-    sessionStorage.setItem('watchCtx', JSON.stringify({
-        ids: itemIds,
-        idx: itemIndex,
-        state: { cat: state.cat, sortField: state.sortField, sortDir: state.sortDir, kw: state.kw }
-    }));
-    location.href = `watch.html?vid=${item.id}`;
-  });
-
-  return li;
-}
-
-
-// --- 기능 함수 (검색, 권한, UI 업데이트 등) ---
-function applyClientSearch(listElement) {
-  const q = state.kw;
-  const nodes = Array.from(listElement.children);
-  nodes.forEach(node => {
-    if (!q) {
-      node.style.display = '';
-      return;
-    }
-    const title = $('.title', node)?.textContent?.toLowerCase() || '';
-    const url = $('.url', node)?.textContent?.toLowerCase() || '';
-    node.style.display = (title.includes(q) || url.includes(q)) ? '' : 'none';
-  });
-}
-
-function syncBulkButtons(elements) {
-  const count = state.selectedIds.size;
-  elements.selCount.textContent = `선택 ${count}`;
-  const canPerformAction = count > 0 && state.user;
-  elements.bulkChangeBtn.disabled = !canPerformAction;
-  elements.bulkDeleteBtn.disabled = !canPerformAction;
-}
-
-function canEdit(item) {
-  if (!state.user) return false;
-  if (state.isAdmin) return true;
-  return item.ownerUid && item.ownerUid === state.user.uid;
-}
-
-async function isAdmin(uid) {
-  try {
-    return (await getDoc(doc(db, 'admins', uid))).exists();
-  } catch { return false; }
-}
-
-function showIndexBanner(bannerElement, err) {
-  const msg = err?.message || '';
-  const linkMatch = msg.match(/https:\/\/console\.firebase\.google\.com[^\s)"]+/);
-  bannerElement.style.display = 'block';
-  bannerElement.innerHTML = linkMatch
-    ? `정렬/필터에 필요한 색인이 없습니다. <a href="${linkMatch[0]}" target="_blank">색인 만들기</a>`
-    : `데이터 로딩 오류. Firestore 콘솔에서 색인 생성이 필요할 수 있습니다.`;
-}
-
-// --- 카테고리 관련 ---
-function initCategoriesSelect(selectElement) {
-  CATEGORY_GROUPS.forEach(group => {
-    const optgroup = document.createElement('optgroup');
-    optgroup.label = group.label;
-    group.children.forEach(cat => {
-      const option = document.createElement('option');
-      option.value = cat.value;
-      option.textContent = cat.label;
-      optgroup.appendChild(option);
-    });
-    selectElement.appendChild(optgroup);
-  });
-}
-
-function getCategoryLabel(value) {
-  for (const group of CATEGORY_GROUPS) {
-    const found = group.children.find(c => c.value === value);
-    if (found) return found.label;
+    `;
+    el.addEventListener('click', ()=> openInWatch(list, x.id));
+    frag.appendChild(el);
   }
-  return value;
+  $cards.appendChild(frag);
 }
 
-// --- 일괄 작업 로직 ---
-function openCategoryDialog(elements, targetIds) {
-    elements.catDialog.dataset.target = JSON.stringify(targetIds);
-    elements.catDialogBody.innerHTML = ''; // Clear previous
-    CATEGORY_GROUPS.forEach(group => {
-        elements.catDialogBody.innerHTML += `<h4>${group.label}</h4>`;
-        group.children.forEach(cat => {
-            elements.catDialogBody.innerHTML += `
-                <label><input type="checkbox" name="dialog_cat" value="${cat.value}"> ${cat.label}</label>
-            `;
-        });
-    });
-    elements.catDialog.showModal();
+/* ---------- watch로 이동 (큐 + 인덱스 전달) ---------- */
+function openInWatch(list, docId){
+  // 재생 큐(현재 렌더 결과 순서)를 간단히 전달
+  const queue = list.map(x => ({
+    id: x.id,
+    url: x.data?.url || '',
+    title: x.data?.title || ''
+  }));
+  const idx = Math.max(0, queue.findIndex(it => it.id === docId));
+
+  sessionStorage.setItem('playQueue', JSON.stringify(queue));
+  sessionStorage.setItem('playIndex', String(idx));
+
+  // 내부 플레이어로 이동 (유튜브 이동 금지)
+  location.href = `watch.html?doc=${encodeURIComponent(docId)}&idx=${idx}`;
 }
 
-async function saveCategoryDialog(elements) {
-    const targetIds = JSON.parse(elements.catDialog.dataset.target || '[]');
-    const newCats = Array.from(elements.catDialogBody.querySelectorAll('input:checked')).map(cb => cb.value);
+/* ---------- 이벤트 ---------- */
+$q?.addEventListener('keydown', async (e)=>{ if(e.key==='Enter'){ render(); } });
+$btnSearch?.addEventListener('click', ()=> render());
+$btnClear ?.addEventListener('click', ()=>{ if($q){ $q.value=''; render(); } });
+$btnMore  ?.addEventListener('click', async ()=>{
+  $btnMore.disabled = true; $btnMore.textContent = '불러오는 중…';
+  try{ await loadPage(); } finally { $btnMore.disabled=false; $btnMore.textContent='더 보기'; }
+});
 
-    const editableIds = targetIds.filter(id => canEdit(state.items.find(i => i.id === id)));
-    if (editableIds.length === 0) return alert('변경 권한이 없습니다.');
+/* ---------- 무한 스크롤 ---------- */
+const SCROLL_LOAD_OFFSET = 320;
+window.addEventListener('scroll', async ()=>{
+  if (isLoading || !hasMore) return;
+  const nearBottom = (window.innerHeight + window.scrollY) >= (document.body.offsetHeight - SCROLL_LOAD_OFFSET);
+  if (!nearBottom) return;
+  await loadPage();
+}, { passive:true });
 
-    try {
-        await Promise.all(editableIds.map(id => updateDoc(doc(db, 'videos', id), { cats: newCats })));
-        resetAndLoad(elements); // 간단하게 전체 리프레시
-    } catch (err) {
-        console.error('카테고리 변경 오류:', err);
-        alert('카테고리 변경 중 오류 발생');
+/* ---------- 초기 로드 ---------- */
+(async function init(){
+  try{
+    await loadPage();
+  }catch(e){
+    console.error(e);
+    setStatus('목록을 불러오지 못했습니다.');
+  }
+})();
+
+/* ===================== */
+/* 스와이프: 중앙 10% 데드존 + 우측 스와이프→index */
+/* ===================== */
+(function initSwipeToIndex(){
+  let sx=0, sy=0, moved=false, blocked=false, t0=0;
+  const THRESH_X=70, MAX_OFF_Y=80, MAX_TIME=700;
+
+  function onStart(e){
+    const t = e.touches?.[0] || e;
+    if(!t) return;
+    sx=t.clientX; sy=t.clientY; moved=false; blocked=false; t0=Date.now();
+
+    // 중앙 10% 가로 데드존
+    const vw = Math.max(document.documentElement.clientWidth, window.innerWidth||0);
+    const L = vw * 0.45, R = vw * 0.55;
+    if (sx >= L && sx <= R) blocked = true;
+  }
+  function onMove(){ moved=true; }
+  function onEnd(e){
+    if(!moved || blocked) return;
+    const t = e.changedTouches?.[0] || e;
+    const dx = t.clientX - sx, dy = t.clientY - sy, dt=Date.now()-t0;
+    if (Math.abs(dy) > MAX_OFF_Y || dt > MAX_TIME) return;
+    if (dx >= THRESH_X){ // 오른쪽으로 스와이프
+      document.documentElement.classList.add('slide-out-right');
+      setTimeout(()=> location.href='index.html', 200);
     }
-}
+  }
+  document.addEventListener('touchstart', onStart, {passive:true});
+  document.addEventListener('touchmove',  onMove,  {passive:true});
+  document.addEventListener('touchend',   onEnd,   {passive:true});
+  document.addEventListener('pointerdown',onStart, {passive:true});
+  document.addEventListener('pointerup',  onEnd,   {passive:true});
+})();
 
-async function onBulkDelete(elements, ids) {
-    const deletableIds = ids.filter(id => canEdit(state.items.find(i => i.id === id)));
-    if (deletableIds.length === 0) return alert('삭제 권한이 없습니다.');
-    if (!confirm(`선택한 ${deletableIds.length}개 항목을 정말 삭제할까요?`)) return;
-
-    try {
-        await Promise.all(deletableIds.map(id => deleteDoc(doc(db, 'videos', id))));
-        resetAndLoad(elements); // 간단하게 전체 리프레시
-    } catch (err) {
-        console.error('삭제 오류:', err);
-        alert('삭제 중 오류 발생');
-    }
-}
-
-
-// --- LocalStorage 및 기타 유틸 ---
-function savePrefs() {
-  localStorage.setItem('list.cat', state.cat);
-  localStorage.setItem('list.sortField', state.sortField);
-  localStorage.setItem('list.sortDir', state.sortDir);
-  localStorage.setItem('list.kw', state.kw);
-}
-
-function loadPrefs() {
-  state.cat = localStorage.getItem('list.cat') || '';
-  state.sortField = localStorage.getItem('list.sortField') || 'createdAt';
-  state.sortDir = localStorage.getItem('list.sortDir') || 'desc';
-  state.kw = localStorage.getItem('list.kw') || '';
-}
-
-function updateUIToReflectState(elements) {
-  elements.catSelect.value = state.cat;
-  elements.sortSelect.value = `${state.sortField}_${state.sortDir}`;
-  elements.keyword.value = state.kw;
-}
-
-function guessThumb(url) {
-  const ytIdMatch = url.match(/(?:youtu\.be\/|v=|\/embed\/|\/shorts\/|vi\/)([a-zA-Z0-9_-]{11})/);
-  return ytIdMatch ? `https://i.ytimg.com/vi/${ytIdMatch[1]}/hqdefault.jpg` : '';
-}
-
-function debounce(func, delay) {
-  let timeout;
-  return (...args) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => func.apply(this, args), delay);
-  };
-}
+/* ===================== */
+/* 슬라이드 아웃 효과 (가벼운 전환) */
+/* ===================== */
+(function injectSlideCSS(){
+  if (document.getElementById('kidsani-slide-css')) return;
+  const style = document.createElement('style');
+  style.id = 'kidsani-slide-css';
+  style.textContent = `
+@keyframes pageSlideRight{ from { transform: translateX(0); opacity:1; } to { transform: translateX(22%); opacity:.92; } }
+:root.slide-out-right body { animation: pageSlideRight 0.26s ease forwards; }
+@media (prefers-reduced-motion: reduce){
+  :root.slide-out-right body { animation:none; }
+}`;
+  document.head.appendChild(style);
+})();
