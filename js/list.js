@@ -1,8 +1,7 @@
-// js/kidsani-list.js (KidsAni v1.0.0)
-// - 새 로직: 간단하고 견고한 목록 로더
-// - createdAt 기준 정렬(오름/내림 토글), 검색(제목/URL 부분일치), 무한스크롤
-// - 카드 탭 → watch.html 내부 플레이어, playQueue/playIndex 전달
-// - 중앙 10% 데드존 스와이프: 오른쪽으로 스와이프 시 index.html 이동
+// js/list.js (KidsAni v1.1.0)
+// - Index에서 전달된 "정렬 모드(mode)" 반영: registered|latest|title → createdAt|seriesSortAt|title
+// - List는 "정렬 방향(dir)"만 토글: asc|desc (기본은 모드별 디폴트 방향)
+// - 검색(제목/URL), 무한 스크롤, 카드 2열(제목/칩/등록 + 썸네일 오른쪽), 스와이프(오른쪽, 중앙 10% 데드존)
 
 import { auth, db } from './firebase-init.js?v=0.1.0';
 import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.1';
@@ -11,7 +10,7 @@ import {
   collection, query, orderBy, limit, startAfter, getDocs
 } from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
 
-/* ---------- 상단바: 최소 동기 ---------- */
+/* ---------- 상단바 ---------- */
 const $ = (s)=>document.querySelector(s);
 const signupLink = $('#signupLink');
 const signinLink = $('#signinLink');
@@ -24,18 +23,18 @@ const btnAbout   = $('#btnAbout');
 const btnList    = $('#btnList');
 
 function openDropdown(){ if(!dropdown)return; dropdown.classList.remove('hidden'); requestAnimationFrame(()=> dropdown.classList.add('show')); }
-function closeDropdown(){ if(!dropdown)return; dropdown.classList.remove('show'); setTimeout(()=> dropdown.classList.add('hidden'), 180); }
+function closeDropdown(){ if(!dropdown)return; dropdown.classList.remove('show'); setTimeout(()=> dropdown.classList.add('hidden'),180); }
 
 onAuthStateChanged((user)=>{
   const loggedIn = !!user;
   signupLink?.classList.toggle('hidden', loggedIn);
   signinLink?.classList.toggle('hidden', loggedIn);
-  if (welcome) welcome.textContent = loggedIn ? `Welcome! ${user.displayName || '회원'}` : '';
+  if(welcome) welcome.textContent = loggedIn ? `Welcome! ${user.displayName||'회원'}` : '';
   closeDropdown();
 });
-menuBtn?.addEventListener('click', (e)=>{ e.stopPropagation(); dropdown?.classList.contains('hidden') ? openDropdown() : closeDropdown(); });
-document.addEventListener('pointerdown', (e)=>{ if(dropdown?.classList.contains('hidden')) return; if(!e.target.closest('#dropdownMenu,#menuBtn')) closeDropdown(); }, true);
-document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeDropdown(); });
+menuBtn?.addEventListener('click',(e)=>{ e.stopPropagation(); dropdown?.classList.contains('hidden') ? openDropdown() : closeDropdown(); });
+document.addEventListener('pointerdown',(e)=>{ if(dropdown?.classList.contains('hidden')) return; if(!e.target.closest('#dropdownMenu,#menuBtn')) closeDropdown(); }, true);
+document.addEventListener('keydown',(e)=>{ if(e.key==='Escape') closeDropdown(); });
 dropdown?.addEventListener('click', (e)=> e.stopPropagation());
 btnSignOut?.addEventListener('click', async ()=>{ if(!auth.currentUser){ location.href='signin.html'; return; } try{ await fbSignOut(auth); }catch{} closeDropdown(); });
 btnGoUpload?.addEventListener('click', ()=>{ location.href='upload.html'; closeDropdown(); });
@@ -49,54 +48,66 @@ const $q         = $('#q');
 const $btnSearch = $('#btnSearch');
 const $btnClear  = $('#btnClear');
 const $btnMore   = $('#btnMore');
-const $btnSort   = $('#btnSort'); // 내림/오름 토글
+const $btnSort   = $('#btnSort');
+
+/* ---------- 정렬 모드/방향 ---------- */
+/*  mode: registered|latest|title ↔ field: createdAt|seriesSortAt|title
+    dir : asc|desc  (list에서 토글)
+    초기값: URL ?mode=..(기본 registered), URL ?dir=..(없으면 모드 기본 방향)
+    - registered → 기본 dir = desc (최신순)
+    - latest     → 기본 dir = asc  (유튜브 업로드 과거→최신)
+    - title      → 기본 dir = asc  (가나다)
+*/
+function getParams(){
+  const u = new URL(location.href);
+  return {
+    mode: (u.searchParams.get('mode') || 'registered'),
+    dir : (u.searchParams.get('dir')  || '')
+  };
+}
+function fieldByMode(mode){
+  switch((mode||'registered')){
+    case 'latest': return 'seriesSortAt';
+    case 'title' : return 'title';
+    case 'registered':
+    default:       return 'createdAt';
+  }
+}
+function defaultDirByMode(mode){
+  switch((mode||'registered')){
+    case 'latest': return 'asc';
+    case 'title' : return 'asc';
+    case 'registered':
+    default:       return 'desc';
+  }
+}
+const urlInit = getParams();
+let mode = urlInit.mode;
+let orderField = fieldByMode(mode);
+let orderDir   = urlInit.dir || defaultDirByMode(mode);
 
 /* ---------- 상태 ---------- */
 const PAGE_SIZE = 60;
-let orderDir = (localStorage.getItem('kidsani_list_order') || 'desc'); // 'desc'|'asc'
 let isLoading = false;
 let hasMore   = true;
 let lastDoc   = null;
-let allDocs   = []; // {id, data}
+let allDocs   = []; // {id,data}
 
-/* ---------- 보조 ---------- */
+/* ---------- 라벨맵 ---------- */
+const LABEL_MAP = (() => {
+  const m = {};
+  try { CATEGORY_GROUPS.forEach(g => g?.children?.forEach(c => { if(c?.value) m[c.value] = c.label || c.value; })); } catch {}
+  return m;
+})();
+const labelOf = (key)=> LABEL_MAP[key] || key;
+
+/* ---------- 유틸 ---------- */
 function esc(s=''){ return String(s).replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[m])); }
 function extractYTId(url=''){ const m=String(url).match(/(?:youtu\.be\/|v=|shorts\/|embed\/)([^?&/]+)/); return m?m[1]:''; }
 function toThumb(url){ const id=extractYTId(url); return id?`https://i.ytimg.com/vi/${id}/hqdefault.jpg`:''; }
-
-const LABEL_MAP = (() => {
-  const m = {};
-  try {
-    CATEGORY_GROUPS.forEach(g => g?.children?.forEach(c => { if (c?.value) m[c.value] = c.label || c.value; }));
-  } catch {}
-  return m;
-})();
-function labelOf(key){ return LABEL_MAP[key] || key; }
-
-function setStatus(t){ if($msg) $msg.textContent = t || ''; }
+function setStatus(t){ if($msg) $msg.textContent = t||''; }
 function toggleMore(show){ if($btnMore) $btnMore.style.display = show ? '' : 'none'; }
-
-/* ---------- 정렬 토글 초기화 ---------- */
-function updateSortButton(){
-  if(!$btnSort) return;
-  // createdAt 내림차순이 기본 → 버튼 라벨은 현재 상태를 표시
-  $btnSort.textContent = (orderDir==='desc') ? '내림차순' : '오름차순';
-  $btnSort.setAttribute('aria-label', `정렬: ${$btnSort.textContent}`);
-}
-updateSortButton();
-
-$btnSort?.addEventListener('click', async ()=>{
-  orderDir = (orderDir === 'desc') ? 'asc' : 'desc';
-  localStorage.setItem('kidsani_list_order', orderDir);
-  // 상태 리셋 후 재조회
-  allDocs = [];
-  lastDoc = null;
-  hasMore = true;
-  $cards.innerHTML = '';
-  setStatus('정렬 변경: 다시 불러오는 중…');
-  updateSortButton();
-  await loadPage();
-});
+function updateSortBtn(){ if(!$btnSort) return; $btnSort.textContent = (orderDir==='asc' ? '오름차순' : '내림차순'); $btnSort.title='정렬 방향 전환(오름/내림)'; }
 
 /* ---------- Firestore 로드 ---------- */
 async function loadPage(){
@@ -105,40 +116,35 @@ async function loadPage(){
   setStatus(allDocs.length ? `총 ${allDocs.length}개 불러옴 · 더 불러오는 중…` : '불러오는 중…');
 
   try{
-    const parts = [ orderBy('createdAt', orderDir) ];
+    const parts = [ orderBy(orderField, orderDir) ];
     if (lastDoc) parts.push(startAfter(lastDoc));
     parts.push(limit(PAGE_SIZE));
     const snap = await getDocs(query(collection(db,'videos'), ...parts));
 
     if(snap.empty){
-      hasMore = false;
-      toggleMore(false);
+      hasMore=false; toggleMore(false);
       setStatus(allDocs.length ? `총 ${allDocs.length}개` : '등록된 영상이 없습니다.');
-      isLoading=false;
-      return false;
+      isLoading=false; return false;
     }
-
     const batch = snap.docs.map(d => ({ id:d.id, data:d.data() }));
     allDocs = allDocs.concat(batch);
     lastDoc = snap.docs[snap.docs.length-1] || lastDoc;
-    if (snap.size < PAGE_SIZE) hasMore = false;
+    if (snap.size < PAGE_SIZE) hasMore=false;
 
     render();
     toggleMore(hasMore);
     setStatus(`총 ${allDocs.length}개`);
-    isLoading=false;
-    return true;
+    isLoading=false; return true;
   }catch(e){
-    console.error('[kidsani-list] load failed:', e);
+    console.error('[list] load failed:', e);
     setStatus('목록을 불러오지 못했습니다.');
     toggleMore(false);
-    isLoading=false;
-    return false;
+    isLoading=false; return false;
   }
 }
 
 /* ---------- 검색(클라 필터) ---------- */
-function filteredDocs(){
+function filtered(){
   const q = ($q?.value || '').trim().toLowerCase();
   if(!q) return allDocs;
   return allDocs.filter(x=>{
@@ -150,38 +156,32 @@ function filteredDocs(){
 
 /* ---------- 렌더 ---------- */
 function render(){
-  const list = filteredDocs();
+  const list = filtered();
   $cards.innerHTML = '';
-  if (!list.length){
+  if(!list.length){
     $cards.innerHTML = `<div style="padding:14px;border:1px dashed var(--border);border-radius:12px;color:#cfcfcf;">결과가 없습니다.</div>`;
     return;
   }
 
   const frag = document.createDocumentFragment();
   for(const x of list){
-    const d       = x.data || {};
-    const title   = d.title || '(제목 없음)';
-    const url     = d.url || '';
-    const catsArr = Array.isArray(d.cats) ? d.cats : (Array.isArray(d.categories) ? d.categories : []);
-    const thumb   = d.thumb || toThumb(url);
-    const nick    = d.uNickname || d.ownerNick || '회원';
+    const d = x.data || {};
+    const title = d.title || '(제목 없음)';
+    const url   = d.url || '';
+    const cats  = Array.isArray(d.cats) ? d.cats : (Array.isArray(d.categories)? d.categories : []);
+    const nick  = d.uNickname || d.ownerNick || '회원';
+    const thumb = d.thumb || toThumb(url);
 
-    const chipsHTML = (catsArr||[]).map(v => `<span class="chip" title="${esc(labelOf(v))}">${esc(labelOf(v))}</span>`).join('');
+    const chipsHTML = (cats||[]).map(v => `<span class="chip" title="${esc(labelOf(v))}">${esc(labelOf(v))}</span>`).join('');
 
     const el = document.createElement('article');
     el.className = 'card';
     el.setAttribute('data-id', x.id);
     el.innerHTML = `
-      <div class="card-grid">
-        <div class="card-left">
-          <div class="title" title="${esc(title)}">${esc(title)}</div>
-          <div class="chips">${chipsHTML}</div>
-          <div class="meta">등록: ${esc(nick)}</div>
-        </div>
-        <div class="card-right">
-          <img class="thumb" src="${esc(thumb)}" alt="썸네일" loading="lazy"/>
-        </div>
-      </div>
+      <div class="title" title="${esc(title)}">${esc(title)}</div>
+      <div class="chips">${chipsHTML}</div>
+      <div class="meta">등록: ${esc(nick)}</div>
+      <div class="right"><div class="thumb-wrap"><img class="thumb" src="${esc(thumb)}" alt="썸네일" loading="lazy"></div></div>
     `;
     el.addEventListener('click', ()=> openInWatch(list, x.id));
     frag.appendChild(el);
@@ -189,98 +189,119 @@ function render(){
   $cards.appendChild(frag);
 }
 
-/* ---------- watch로 이동 (큐 + 인덱스 전달) ---------- */
+/* ---------- watch로 이동 (큐 + 인덱스) ---------- */
 function openInWatch(list, docId){
-  // 재생 큐(현재 렌더 결과 순서)를 간단히 전달
-  const queue = list.map(x => ({
-    id: x.id,
-    url: x.data?.url || '',
-    title: x.data?.title || ''
-  }));
+  const queue = list.map(x => ({ id:x.id, url:x.data?.url||'', title:x.data?.title||'' }));
   const idx = Math.max(0, queue.findIndex(it => it.id === docId));
-
   sessionStorage.setItem('playQueue', JSON.stringify(queue));
   sessionStorage.setItem('playIndex', String(idx));
-
-  // 내부 플레이어로 이동 (유튜브 이동 금지)
   location.href = `watch.html?doc=${encodeURIComponent(docId)}&idx=${idx}`;
 }
 
 /* ---------- 이벤트 ---------- */
-$q?.addEventListener('keydown', async (e)=>{ if(e.key==='Enter'){ render(); } });
+$btnSort?.addEventListener('click', async ()=>{
+  orderDir = (orderDir==='asc' ? 'desc' : 'asc');
+  // URL dir 쿼리 갱신(히스토리 보존)
+  const u = new URL(location.href);
+  u.searchParams.set('mode', mode);
+  u.searchParams.set('dir', orderDir);
+  history.replaceState(null, '', u);
+  // 리셋 후 재조회
+  updateSortBtn();
+  allDocs=[]; lastDoc=null; hasMore=true; $cards.innerHTML='';
+  await loadPage();
+});
+
+$q?.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ render(); } });
 $btnSearch?.addEventListener('click', ()=> render());
 $btnClear ?.addEventListener('click', ()=>{ if($q){ $q.value=''; render(); } });
 $btnMore  ?.addEventListener('click', async ()=>{
-  $btnMore.disabled = true; $btnMore.textContent = '불러오는 중…';
-  try{ await loadPage(); } finally { $btnMore.disabled=false; $btnMore.textContent='더 보기'; }
+  $btnMore.disabled=true; $btnMore.textContent='불러오는 중…';
+  try{ await loadPage(); } finally{ $btnMore.disabled=false; $btnMore.textContent='더 보기'; }
 });
 
 /* ---------- 무한 스크롤 ---------- */
 const SCROLL_LOAD_OFFSET = 320;
 window.addEventListener('scroll', async ()=>{
-  if (isLoading || !hasMore) return;
+  if(isLoading || !hasMore) return;
   const nearBottom = (window.innerHeight + window.scrollY) >= (document.body.offsetHeight - SCROLL_LOAD_OFFSET);
-  if (!nearBottom) return;
+  if(!nearBottom) return;
   await loadPage();
 }, { passive:true });
 
-/* ---------- 초기 로드 ---------- */
-(async function init(){
-  try{
-    await loadPage();
-  }catch(e){
-    console.error(e);
-    setStatus('목록을 불러오지 못했습니다.');
-  }
+/* ---------- 초기 ---------- */
+(function init(){
+  updateSortBtn();
+  loadPage();
 })();
 
-/* ===================== */
-/* 스와이프: 중앙 10% 데드존 + 우측 스와이프→index */
-/* ===================== */
+/* ---------- 스와이프: 중앙 10% 데드존 + 오른쪽 스와이프 → index (Pointer Events 단일화) ---------- */
 (function initSwipeToIndex(){
-  let sx=0, sy=0, moved=false, blocked=false, t0=0;
-  const THRESH_X=70, MAX_OFF_Y=80, MAX_TIME=700;
+  let startX=0, startY=0, moved=false, blocked=false, t0=0, active=false, pid=null;
+  const THRESH_X = 70;   // 최소 수평 거리
+  const MAX_OFF_Y = 80;  // 수직 흔들림 허용치
+  const MAX_TIME  = 700; // 최대 제스처 시간(ms)
 
-  function onStart(e){
-    const t = e.touches?.[0] || e;
-    if(!t) return;
-    sx=t.clientX; sy=t.clientY; moved=false; blocked=false; t0=Date.now();
+  const el = document.querySelector('main') || document.body;
+  // 수직 스크롤은 브라우저에 맡기고, 수평 제스처를 직접 처리
+  if (el && !el.style.touchAction) el.style.touchAction = 'pan-y';
 
-    // 중앙 10% 가로 데드존
-    const vw = Math.max(document.documentElement.clientWidth, window.innerWidth||0);
+  function onPointerDown(e){
+    // 마우스 오른쪽/중간 버튼 무시
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    active = true; moved = false; blocked = false; pid = e.pointerId;
+    startX = e.clientX; startY = e.clientY; t0 = Date.now();
+
+    // 중앙 10% 데드존 (가로)
+    const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
     const L = vw * 0.45, R = vw * 0.55;
-    if (sx >= L && sx <= R) blocked = true;
+    if (startX >= L && startX <= R) blocked = true;
+
+    // 이 제스처 추적(포인터 캡처)
+    try { e.target.setPointerCapture(pid); } catch(_){}
   }
-  function onMove(){ moved=true; }
-  function onEnd(e){
-    if(!moved || blocked) return;
-    const t = e.changedTouches?.[0] || e;
-    const dx = t.clientX - sx, dy = t.clientY - sy, dt=Date.now()-t0;
-    if (Math.abs(dy) > MAX_OFF_Y || dt > MAX_TIME) return;
-    if (dx >= THRESH_X){ // 오른쪽으로 스와이프
-      document.documentElement.classList.add('slide-out-right');
-      setTimeout(()=> location.href='index.html', 200);
+
+  function onPointerMove(e){
+    if (!active || e.pointerId !== pid) return;
+    moved = true;
+
+    // 수직으로 크게 흔들리면 제스처 취소
+    const dy = e.clientY - startY;
+    if (Math.abs(dy) > MAX_OFF_Y) {
+      active = false;
+      try { e.target.releasePointerCapture(pid); } catch(_){}
     }
   }
-  document.addEventListener('touchstart', onStart, {passive:true});
-  document.addEventListener('touchmove',  onMove,  {passive:true});
-  document.addEventListener('touchend',   onEnd,   {passive:true});
-  document.addEventListener('pointerdown',onStart, {passive:true});
-  document.addEventListener('pointerup',  onEnd,   {passive:true});
-})();
 
-/* ===================== */
-/* 슬라이드 아웃 효과 (가벼운 전환) */
-/* ===================== */
-(function injectSlideCSS(){
-  if (document.getElementById('kidsani-slide-css')) return;
-  const style = document.createElement('style');
-  style.id = 'kidsani-slide-css';
-  style.textContent = `
-@keyframes pageSlideRight{ from { transform: translateX(0); opacity:1; } to { transform: translateX(22%); opacity:.92; } }
-:root.slide-out-right body { animation: pageSlideRight 0.26s ease forwards; }
-@media (prefers-reduced-motion: reduce){
-  :root.slide-out-right body { animation:none; }
-}`;
-  document.head.appendChild(style);
+  function onPointerUp(e){
+    if (!active || e.pointerId !== pid) return;
+    active = false;
+    try { e.target.releasePointerCapture(pid); } catch(_){}
+
+    if (!moved || blocked) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    const dt = Date.now() - t0;
+
+    if (Math.abs(dy) > MAX_OFF_Y || dt > MAX_TIME) return;
+
+    // 오른쪽으로 스와이프 → index.html
+    if (dx >= THRESH_X) {
+      // 애니메이션이 없어도 이동은 되지만, 있으면 부드럽게
+      document.documentElement.classList.add('slide-out-right');
+      setTimeout(() => { location.href = 'index.html'; }, 160);
+    }
+  }
+
+  function onPointerCancel(e){
+    if (e.pointerId !== pid) return;
+    active = false;
+    try { e.target.releasePointerCapture(pid); } catch(_){}
+  }
+
+  // Pointer Events만 사용(이중 등록 방지)
+  (document.querySelector('main') || document).addEventListener('pointerdown',  onPointerDown,  { passive: true });
+  (document.querySelector('main') || document).addEventListener('pointermove',  onPointerMove,  { passive: true });
+  (document.querySelector('main') || document).addEventListener('pointerup',    onPointerUp,    { passive: true });
+  (document.querySelector('main') || document).addEventListener('pointercancel',onPointerCancel,{ passive: true });
 })();
