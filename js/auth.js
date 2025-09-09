@@ -1,5 +1,9 @@
-// js/auth.js  (KidsAni v0.1.3 stable)
-import { auth, db } from "./firebase-init.js"; // ← index가 ?v=...로 임포트해도 OK
+// js/auth.js  (KidsAni v0.1.4 hotfix)
+// - onAuthStateChanged: (cb)와 (auth, cb) 모두 호환
+// - signOut: 인자 무시(넘겨도 무시) → index/upload 모두 안전
+// - 나머지 유틸은 기존 그대로 유지
+
+import { auth, db } from "./firebase-init.js";
 export { auth, db };
 
 // Auth SDK 원함수
@@ -11,7 +15,7 @@ import {
   updateProfile as fbUpdateProfile,
 } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
 
-// Firestore SDK 원함수(페이지에서 직접 쓰고 싶을 때)
+// Firestore SDK 원함수(페이지에서 직접 쓰고 싶을 때 재수출)
 export {
   doc,
   runTransaction,
@@ -21,8 +25,12 @@ export {
 } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
 
 // ─────────────────────────────────────
-// onAuthStateChanged 래퍼: 콜백만 넘기면 됨
-export function onAuthStateChanged(cb) {
+// onAuthStateChanged 래퍼: 두 형태 모두 지원
+//   권장: onAuthStateChanged((user)=>{})
+//   호환: onAuthStateChanged(auth, (user)=>{})
+export function onAuthStateChanged(cbOrAuth, maybeCb) {
+  const cb = (typeof cbOrAuth === 'function') ? cbOrAuth : maybeCb;
+  if (typeof cb !== 'function') throw new Error('onAuthStateChanged: callback이 없습니다.');
   return fbOnAuthStateChanged(auth, cb);
 }
 
@@ -30,14 +38,14 @@ export function onAuthStateChanged(cb) {
 export async function signInWithGoogle() {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
-  const cred = await signInWithPopup(auth, provider); // getAuth 기반 → 팝업 리졸버 자동
+  const cred = await signInWithPopup(auth, provider);
   return cred.user;
 }
 
-// index에서 'signOut' 이름을 기대할 수 있으므로 동일 이름으로 보장
-export async function signOut() { await fbSignOut(auth); }
+// signOut: 인자 무시(넘겨도 OK) — 기존 코드와 호환
+export async function signOut(..._args) { await fbSignOut(auth); }
 // (원하면 logout 별칭도 사용 가능)
-export async function logout() { await fbSignOut(auth); }
+export async function logout(..._args) { await fbSignOut(auth); }
 
 // 닉네임 정규화
 export function sanitizeNickname(raw) {
