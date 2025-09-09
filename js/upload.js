@@ -8,12 +8,12 @@
 // - 상단바/드롭다운, 오른쪽 스와이프 → index 이동
 console.log(new URL('./firebase-init.js?v=0.1.0', import.meta.url).href);
 
-import { auth, db } from './firebase-init.js?v=0.1.0';
-import { onAuthStateChanged, signOut as fbSignOut } from './auth.js?v=0.1.1';
+import { auth, db } from './firebase-init.js';
+import { onAuthStateChanged, signOut as fbSignOut } from './auth.js';
 import {
   doc, getDoc, setDoc, serverTimestamp, collection, getDocs, query, where, updateDoc, Timestamp
 } from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
-import { CATEGORY_GROUPS } from './categories.js?v=0.2.1';
+import { CATEGORY_GROUPS } from './categories.js';
 
 /* ------- 전역 내비 중복 방지 ------- */
 window.__swipeNavigating = window.__swipeNavigating || false;
