@@ -1,187 +1,400 @@
-// js/watch.js (v0.1.2-kidsani)
-import { auth, db } from './firebase-init.js';
-import { onAuthStateChanged, signOut as fbSignOut } from './auth.js';
-import { getDoc, doc } from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js';
+// js/watch.js (KidsAni Watch v0.4.0)
+// 요구사항: 로그인 없이 읽기 가능, 시리즈 이전/다음, 자동다음, 위치복원, 화면잠금, 웨이크락, 가로전체화면 시도
 
-/* ---------- 상단바(기존 패턴) ---------- */
-const signupLink = document.getElementById('signupLink');
-const signinLink = document.getElementById('signinLink');
-const welcome    = document.getElementById('welcome');
-const menuBtn    = document.getElementById('menuBtn');
-const dropdown   = document.getElementById('dropdownMenu');
-const btnSignOut = document.getElementById('btnSignOut');
-const btnGoUpload= document.getElementById('btnGoUpload');
-const btnAbout   = document.getElementById('btnAbout');
-const btnList    = document.getElementById('btnList');
+import { db } from "./firebase-init.js";
 
-function openDropdown(){ dropdown?.classList.remove('hidden'); requestAnimationFrame(()=> dropdown?.classList.add('show')); }
-function closeDropdown(){ dropdown?.classList.remove('show'); setTimeout(()=> dropdown?.classList.add('hidden'), 180); }
+// Firestore SDK (필요 모듈만 개별 임포트)
+import {
+  doc, getDoc, collection, query, where, orderBy, limit, getDocs
+} from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
 
-onAuthStateChanged(auth, user => {
-  const loggedIn = !!user;
-  signupLink?.classList.toggle('hidden', loggedIn);
-  signinLink?.classList.toggle('hidden', loggedIn);
-  if (welcome) welcome.textContent = loggedIn ? `Welcome! ${user?.displayName || '회원'}` : '';
-  closeDropdown();
-});
-menuBtn   ?.addEventListener('click', (e)=>{ e.stopPropagation(); dropdown?.classList.contains('hidden') ? openDropdown() : closeDropdown(); });
-document.addEventListener('pointerdown', (e)=>{ if(dropdown?.classList.contains('hidden')) return; if(!e.target.closest('#dropdownMenu,#menuBtn')) closeDropdown(); }, true);
-document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeDropdown(); });
-dropdown  ?.addEventListener('click', (e)=> e.stopPropagation());
-btnSignOut?.addEventListener('click', async ()=>{ if(!auth.currentUser){ location.href='signin.html'; return; } try{ await fbSignOut(auth); }catch{} closeDropdown(); });
-btnGoUpload?.addEventListener('click', ()=>{ location.href='upload.html'; closeDropdown(); });
-btnAbout   ?.addEventListener('click', ()=>{ location.href='about.html';  closeDropdown(); });
-btnList    ?.addEventListener('click', ()=>{ location.href='list.html';   closeDropdown(); });
+/* ───────────── 유틸 ───────────── */
+const $ = (s) => document.querySelector(s);
+const params = new URLSearchParams(location.search);
+// 진입 방식 1) ?id=<videos/{id} 문서ID>  2) ?v=<YouTubeID>
+const docId = params.get("id");
+const ytvFromParam = params.get("v")?.trim() || null;
 
-/* ---------- DOM ---------- */
-const $title   = document.getElementById('title');
-const $chips   = document.getElementById('chips');
-const $meta    = document.getElementById('meta');
-const $btnPrev = document.getElementById('btnPrev');
-const $btnNext = document.getElementById('btnNext');
-const $wrap    = document.getElementById('playerWrap');
+function extractYouTubeId(urlOrId) {
+  if (!urlOrId) return null;
+  // 이미 ID 형태면(11자 가정) 그대로 사용
+  const idLike = urlOrId.match(/^[a-zA-Z0-9_-]{11}$/);
+  if (idLike) return idLike[0];
 
-/* ---------- 상태 ---------- */
-let queue = [];
-let index = 0;
+  // URL에서 추출
+  const m =
+    urlOrId.match(/[?&]v=([^&#]+)/) || // youtu.be 제외 일반 URL
+    urlOrId.match(/youtu\.be\/([^?&#]+)/) ||
+    urlOrId.match(/embed\/([^?&#]+)/);
+  return m ? m[1] : null;
+}
+
+function saveLastWatch({ videoId, title, seriesKey, episode, docId }) {
+  const data = { videoId, title, seriesKey: seriesKey || null, episode: episode ?? null, docId: docId || null, at: Date.now() };
+  localStorage.setItem("lastWatch", JSON.stringify(data));
+}
+
+function getAutoNextDefault() {
+  const s = localStorage.getItem("autonext");
+  return s === null ? true : s === "true";
+}
+
+function setAutoNext(val) {
+  localStorage.setItem("autonext", String(val));
+}
+
+/* ────────── 상태 ────────── */
 let player = null;
-let muted  = true;           // 기본 음소거 시작
-let armedUnmute = false;     // 최초 터치로 해제 1회용
+let ytId = null;
+let vDoc = null;           // Firestore 비디오 문서 데이터
+let vRefId = null;         // Firestore 문서 ID
+let wakeLock = null;
+let lockOn = false;
 
-/* ---------- 유틸 ---------- */
-function extractId(url=''){
-  const m = String(url).match(/(?:youtu\.be\/|v=|shorts\/|embed\/)([^?&\/]+)/);
-  return m ? m[1] : '';
-}
-function readAutoNext(){
-  const v = (localStorage.getItem('autonext') || '').toLowerCase();
-  return v==='1' || v==='true' || v==='on';
-}
+/* ────────── DOM ────────── */
+const elTitle = $("#v-title");
+const elSeries = $("#v-series");
+const elChips = $("#v-chips");
+const elPrev = $("#btn-prev");
+const elNext = $("#btn-next");
+const elAuto = $("#toggle-autonext");
+const elLock = $("#toggle-lock");
+const elFull = $("#btn-full");
+const elMute = $("#btn-mute");
+const elSpeed = $("#btn-speed");
+const elLockLayer = $("#lock");
+const elNextPreview = $("#next-preview");
 
-/* ---------- 큐 로딩 ---------- */
-function loadQueueFromSession(){
-  try{
-    const rawQ = sessionStorage.getItem('playQueue');
-    const rawI = sessionStorage.getItem('playIndex');
-    if(!rawQ) return false;
-    const arr = JSON.parse(rawQ || '[]');
-    const idx = Number(rawI || 0);
-    if(!Array.isArray(arr) || !arr.length) return false;
-    queue = arr;
-    index = (isFinite(idx) ? Math.max(0, Math.min(arr.length-1, idx)) : 0);
-    return true;
-  }catch{ return false; }
-}
+/* ────────── YouTube API ────────── */
+// onYouTubeIframeAPIReady 전역 훅 필요: window에 심는다.
+window.onYouTubeIframeAPIReady = () => {
+  boot().catch(console.error);
+};
 
-async function loadSingleDocIfNeeded(){
-  const params = new URLSearchParams(location.search);
-  const docId  = params.get('doc');
-  const idxStr = params.get('idx');
-  if (queue.length || !docId) return;
+async function boot() {
+  // 1) 문서/파라미터 로드
+  if (docId) {
+    const snap = await getDoc(doc(db, "videos", docId));
+    if (!snap.exists()) throw new Error("영상 문서를 찾을 수 없습니다.");
+    vDoc = snap.data();
+    vRefId = snap.id;
+    ytId = extractYouTubeId(vDoc.url);
+  } else if (ytvFromParam) {
+    ytId = extractYouTubeId(ytvFromParam);
+    vDoc = {
+      title: "(단일 재생) YouTube",
+      cats: [],
+      seriesKey: null, seriesTitle: null, episode: null
+    };
+  } else {
+    throw new Error("watch 페이지 진입 파라미터가 없습니다. (?id=문서ID 또는 ?v=YouTubeID)");
+  }
 
-  try{
-    const snap = await getDoc(doc(db,'videos', decodeURIComponent(docId)));
-    if (!snap.exists()) return;
-    const d = snap.data();
-    queue = [{
-      id: snap.id,
-      url: d?.url || '',
-      title: d?.title || '',
-      cats: Array.isArray(d?.categories) ? d.categories : []
-    }];
-    index = Math.max(0, Math.min(queue.length-1, Number(idxStr || 0) || 0));
-  }catch{}
-}
+  if (!ytId) throw new Error("유효한 YouTube ID를 추출하지 못했습니다.");
 
-/* ---------- 정보 표시 ---------- */
-function renderInfo(){
-  const item = queue[index] || {};
-  const t = item.title || '(제목 없음)';
-  $title.textContent = t;
+  // 2) 메타 표시
+  renderMeta();
 
-  $chips.innerHTML = '';
-  (Array.isArray(item.cats) ? item.cats : []).forEach(c=>{
-    const span = document.createElement('span'); span.className='chip'; span.textContent=c; $chips.appendChild(span);
+  // 3) 다음/이전 화 상태 확인
+  await prepareSeriesNav();
+
+  // 4) 플레이어 생성
+  createPlayer(ytId);
+
+  // 5) 자동다음 설정 동기화
+  elAuto.checked = getAutoNextDefault();
+  elAuto.addEventListener("change", () => setAutoNext(elAuto.checked));
+
+  // 6) 컨트롤 이벤트
+  wireControls();
+
+  // 7) lastWatch 기록
+  saveLastWatch({
+    videoId: ytId,
+    title: vDoc?.title || "(단일 재생)",
+    seriesKey: vDoc?.seriesKey || null,
+    episode: vDoc?.episode ?? null,
+    docId: vRefId || null,
   });
-
-  $meta.textContent = `${index+1} / ${queue.length}`;
 }
 
-/* ---------- Iframe API ---------- */
-function createPlayer(){
-  const item = queue[index] || {};
-  const id = extractId(item.url);
-  if (!id) return;
+function renderMeta() {
+  elTitle.textContent = vDoc?.title || "(제목 없음)";
+  const seriesKey = vDoc?.seriesKey || null;
+  if (seriesKey) {
+    const epi = vDoc?.episode ?? "?";
+    const st = vDoc?.seriesTitle || "시리즈";
+    elSeries.textContent = `${st} · ${epi}화`;
+  } else {
+    elSeries.textContent = "시리즈 정보 없음";
+  }
 
-  if (player){ try{ player.destroy(); }catch{} player=null; }
+  elChips.innerHTML = "";
+  const cats = Array.isArray(vDoc?.cats) ? vDoc.cats : [];
+  cats.forEach(c => {
+    const span = document.createElement("span");
+    span.className = "chip";
+    span.textContent = c;
+    elChips.appendChild(span);
+  });
+}
 
-  // eslint-disable-next-line no-undef
-  player = new YT.Player('player', {
-    width: '100%', height: '100%',
-    videoId: id,
-    playerVars: { autoplay: 1, mute: muted ? 1 : 0, playsinline: 1, rel: 0, modestbranding: 1, enablejsapi: 1 },
+async function prepareSeriesNav() {
+  elPrev.disabled = true;
+  elNext.disabled = true;
+  elNextPreview.textContent = "";
+
+  if (!vDoc?.seriesKey || typeof vDoc?.episode !== "number") return;
+
+  const seriesKey = vDoc.seriesKey;
+  const epi = vDoc.episode;
+
+  // 다음 화
+  const qNext = query(
+    collection(db, "videos"),
+    where("seriesKey", "==", seriesKey),
+    where("episode", ">", epi),
+    orderBy("episode", "asc"),
+    limit(1)
+  );
+  const nextSnap = await getDocs(qNext);
+  let nextDoc = null;
+  nextSnap.forEach(d => { nextDoc = { id: d.id, ...d.data() }; });
+
+  // 이전 화
+  const qPrev = query(
+    collection(db, "videos"),
+    where("seriesKey", "==", seriesKey),
+    where("episode", "<", epi),
+    orderBy("episode", "desc"),
+    limit(1)
+  );
+  const prevSnap = await getDocs(qPrev);
+  let prevDoc = null;
+  prevSnap.forEach(d => { prevDoc = { id: d.id, ...d.data() }; });
+
+  if (prevDoc) {
+    elPrev.disabled = false;
+    elPrev.onclick = () => toDoc(prevDoc.id);
+  } else {
+    elPrev.disabled = true;
+    elPrev.onclick = null;
+  }
+
+  if (nextDoc) {
+    elNext.disabled = false;
+    elNext.onclick = () => toDoc(nextDoc.id);
+    const previewTitle = nextDoc.title || "다음 화";
+    elNextPreview.textContent = `다음 화: ${previewTitle}`;
+  } else {
+    elNext.disabled = true;
+    elNext.onclick = null;
+  }
+}
+
+function toDoc(id) {
+  // 동일 페이지 내 전환으로 히스토리 깔끔 유지
+  location.href = `watch.html?id=${encodeURIComponent(id)}`;
+}
+
+/* ────────── 플레이어 ────────── */
+function createPlayer(videoId) {
+  player = new YT.Player("player", {
+    videoId,
+    playerVars: {
+      modestbranding: 1,
+      rel: 0,
+      playsinline: 1,
+      fs: 1,
+    },
     events: {
-      onReady: (e)=>{
-        try{
-          muted ? e.target.mute() : e.target.unMute();
-          e.target.playVideo();
-          armOneTapUnmute();   // 준비되면 1회 터치 가드 활성화
-        }catch{}
-      },
-      onStateChange: (e)=>{
-        if (e.data === 0 && readAutoNext()) goNext(); // 0=ended
-      }
+      onReady: onPlayerReady,
+      onStateChange: onPlayerStateChange,
     }
   });
 }
-window.onYouTubeIframeAPIReady = function(){ createPlayer(); };
 
-/* ---------- 한 번 터치로 음소거 해제 ---------- */
-function armOneTapUnmute(){
-  if (armedUnmute) return;
-  armedUnmute = true;
+let resumeTimer = null;
+let saveTimer = null;
 
-  const once = async ()=>{
-    try{
-      if (player && muted){
-        player.unMute();
-        muted = false;
-        // iOS 등에서 재생 토글을 덮어쓰기 위해 명시적으로 재생
-        player.playVideo();
+function onPlayerReady(e) {
+  // 위치 복원
+  const key = `watchpos:${ytId}`;
+  const saved = Number(localStorage.getItem(key) || "0");
+  if (saved > 5) {
+    // 2초 뒤 점프(초기 광고/프리롤 대비)
+    resumeTimer = setTimeout(() => {
+      try {
+        player.seekTo(saved, true);
+      } catch {}
+    }, 2000);
+  }
+
+  // 웨이크락 시도 (재생 시)
+  // 전체화면/가로잠금 시도는 사용자 제스처 버튼에서 수행
+}
+
+async function requestWakeLock() {
+  try {
+    if ("wakeLock" in navigator) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    }
+  } catch {}
+}
+
+function releaseWakeLock() {
+  try {
+    if (wakeLock) { wakeLock.release(); wakeLock = null; }
+  } catch {}
+}
+
+async function tryFullscreenAndLandscape() {
+  const root = document.documentElement;
+  try {
+    if (!document.fullscreenElement) {
+      await root.requestFullscreen();
+    }
+  } catch {}
+  try {
+    if (screen.orientation && screen.orientation.lock) {
+      await screen.orientation.lock("landscape");
+    }
+  } catch {}
+}
+
+function onPlayerStateChange(e) {
+  const state = e.data;
+  // 재생 중: 위치 저장, 웨이크락
+  if (state === YT.PlayerState.PLAYING) {
+    requestWakeLock();
+    if (!saveTimer) {
+      saveTimer = setInterval(() => {
+        try {
+          const t = Math.floor(player.getCurrentTime());
+          localStorage.setItem(`watchpos:${ytId}`, String(t));
+        } catch {}
+      }, 5000);
+    }
+  }
+  // 일시정지: 웨이크락 유지(O), 저장은 계속
+  if (state === YT.PlayerState.PAUSED) {
+    // no-op
+  }
+  // 종료: 자동 다음화
+  if (state === YT.PlayerState.ENDED) {
+    releaseWakeLock();
+    clearInterval(saveTimer); saveTimer = null;
+    localStorage.removeItem(`watchpos:${ytId}`); // 다 본 영상은 위치 초기화
+
+    if (elAuto.checked && !elNext.disabled) {
+      elNext.click();
+    }
+  }
+}
+
+/* ────────── 컨트롤 & 잠금 ────────── */
+function wireControls() {
+  // 자동다음 체크는 boot에서 이미 연결
+
+  elLock.addEventListener("change", () => {
+    lockOn = elLock.checked;
+    elLockLayer.classList.toggle("active", lockOn);
+  });
+
+  // 전체화면(사용자 제스처)
+  elFull.addEventListener("click", async () => {
+    await tryFullscreenAndLandscape();
+    // 최초 재생도 보장
+    try { player.playVideo(); } catch {}
+  });
+
+  // 음소거
+  elMute.addEventListener("click", () => {
+    try {
+      const m = player.isMuted();
+      if (m) player.unMute(); else player.mute();
+    } catch {}
+  });
+
+  // 배속
+  elSpeed.addEventListener("click", () => {
+    try {
+      const cur = player.getPlaybackRate();
+      // 유튜브 지원 속도 목록 중에서 다음 값
+      const rates = player.getAvailablePlaybackRates() || [0.75, 1, 1.25, 1.5, 1.75, 2];
+      const idx = rates.indexOf(cur);
+      const next = rates[(idx + 1) % rates.length];
+      player.setPlaybackRate(next);
+      elSpeed.textContent = `배속 ${next.toFixed(2)}×`;
+    } catch {}
+  });
+
+  // 키보드 단축키
+  window.addEventListener("keydown", (ev) => {
+    if (lockOn) { ev.preventDefault(); return; }
+    try {
+      switch (ev.key) {
+        case "k":
+        case "K":
+          togglePlay(); break;
+        case "j":
+        case "J":
+          seekRel(-10); break;
+        case "l":
+        case "L":
+          seekRel(10); break;
+        case "m":
+        case "M":
+          if (player.isMuted()) player.unMute(); else player.mute(); break;
+        case ",":
+          stepSpeed(-0.25); break;
+        case ".":
+          stepSpeed(0.25); break;
+        case "[":
+          if (!elPrev.disabled) elPrev.click(); break;
+        case "]":
+          if (!elNext.disabled) elNext.click(); break;
       }
-    }catch{}
-    // 한번만
-    $wrap.removeEventListener('click', once);
-    $wrap.removeEventListener('touchstart', once);
-  };
+    } catch {}
+  });
 
-  // 사용자가 영상 영역을 한 번 터치/클릭하면 해제
-  $wrap.addEventListener('click', once, { once:true });
-  $wrap.addEventListener('touchstart', once, { once:true, passive:true });
+  // 잠금 레이어 클릭 막기
+  elLockLayer.addEventListener("click", (e) => {
+    if (lockOn) e.stopPropagation();
+  });
 }
 
-/* ---------- 이동 ---------- */
-function go(i){
-  index = Math.max(0, Math.min(queue.length-1, i));
-  renderInfo();
-  createPlayer();
-  sessionStorage.setItem('playIndex', String(index));
+function togglePlay() {
+  const s = player.getPlayerState();
+  if (s === YT.PlayerState.PLAYING) player.pauseVideo();
+  else player.playVideo();
 }
-function goNext(){ if (index < queue.length-1) go(index+1); }
-function goPrev(){ if (index > 0) go(index-1); }
 
-/* ---------- 이벤트 ---------- */
-$btnNext?.addEventListener('click', goNext);
-$btnPrev?.addEventListener('click', goPrev);
+function seekRel(dt) {
+  const t = player.getCurrentTime();
+  player.seekTo(Math.max(0, t + dt), true);
+}
 
-/* ---------- 시작 ---------- */
-(async function init(){
-  const ok = loadQueueFromSession();
-  if (!ok) await loadSingleDocIfNeeded();
-  if (!queue.length){ location.replace('index.html'); return; }
-  renderInfo();
+function stepSpeed(dv) {
+  const cur = player.getPlaybackRate();
+  let next = Math.max(0.25, Math.min(2, (Math.round((cur + dv)*100)/100)));
+  player.setPlaybackRate(next);
+  elSpeed.textContent = `배속 ${next.toFixed(2)}×`;
+}
 
-  if (window.YT && window.YT.Player) createPlayer();
-})();
-//
-// end of js/watch.js (v0.1.2-kidsani)
+/* ────────── 정리 ────────── */
+window.addEventListener("beforeunload", () => {
+  try { clearInterval(saveTimer); } catch {}
+  try { clearTimeout(resumeTimer); } catch {}
+  releaseWakeLock();
+});
+
+/* ────────── Firestore 인덱스 안내 ──────────
+시리즈 이전/다음 조회를 위해 아래 조합 색인이 필요할 수 있습니다.
+
+videos: seriesKey == ... , episode asc
+videos: seriesKey == ... , episode desc
+
+콘솔에서 쿼리 에러 링크로 생성하시면 됩니다.
+──────────────────────────────────────────*/
