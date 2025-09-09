@@ -1,12 +1,11 @@
-<!-- watch.html (v0.1.1-kidsani) -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>영상 보기</title>
+  <title>KidsAni - 영상 보기</title>
 
-  <!-- CSP: 기존 정책 유지 + watch 전용으로 youtube.com 스크립트 허용 추가(iframe API) -->
+  <!-- CSP -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     connect-src 'self' https://www.googleapis.com https://firestore.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseinstallations.googleapis.com https://www.gstatic.com https://www.youtube.com;
@@ -16,73 +15,132 @@
     style-src 'self' 'unsafe-inline';
     object-src 'none';
     base-uri 'self';
+    form-action 'self';
   ">
 
-  <link rel="stylesheet" href="css/style.css"/>
+  <!-- PWA / 아이콘(프로젝트 내 아이콘 경로 유지) -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#000000">
+  <link rel="icon" type="image/png" sizes="192x192" href="image/kidsani_logo_192r.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="image/kidsani_logo_512r.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="image/kidsani_logo_192r.png">
+
+  <!-- OG -->
+  <meta property="og:title" content="KidsAni - 영상 보기" />
+  <meta property="og:description" content="아이들을 위한 영상 큐레이션 플랫폼" />
+  <meta property="og:image" content="image/kidsani_logo_512.png" />
+
+  <link rel="stylesheet" href="css/style.css">
+
   <style>
-    /* 화면 톤/간격은 기존 스타일을 따르고, 필요한 최소 레이아웃만 정의 */
-    body{ padding-top:48px; }
-    main{ max-width:1100px; margin:0 auto; padding:0 12px 28px; }
-    .player-wrap{ position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:12px; overflow:hidden; }
-    .player-wrap iframe{ position:absolute; inset:0; width:100%; height:100%; }
-    .controls{ display:flex; gap:8px; justify-content:space-between; align-items:center; margin:8px 0 0; }
-    .btn{ padding:8px 10px; border-radius:10px; border:1px solid #2a2a2a; background:#151515; color:#fff; cursor:pointer; }
-    .btn:hover{ background:#1a1a1a; }
-    .title{ margin:10px 0 6px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .chips{ display:flex; gap:4px; flex-wrap:wrap; }
-    .chip{ font-size:12px; padding:1px 6px; border:1px solid #2a2a2a; border-radius:999px; color:#ddd; }
-    .right-ctrls{ display:flex; gap:8px; align-items:center; }
-    .mute-btn{ padding:6px 10px; border-radius:999px; border:1px solid #2a2a2a; background:#101010; color:#fff; cursor:pointer; }
-    .meta{ font-size:12px; color:#9aa0a6; margin-top:4px; }
+    /* 상단바는 기존 기준 유지, 로고 높이 선호 반영 */
+    header.k-top {
+      display:flex; align-items:center; gap:8px;
+      padding:8px 12px; border-bottom:1px solid #eee;
+      position: sticky; top:0; background:#fff; z-index:20;
+    }
+    .brand-logo { height:48px; }
+    @media (max-width: 420px) { .brand-logo { height:40px; } }
+
+    main#watch {
+      max-width: 1100px; margin: 0 auto; padding: 8px 12px 24px;
+    }
+    .meta {
+      display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center;
+      margin:8px 0 4px;
+    }
+    .title { font-size: 20px; font-weight: 700; }
+    .series-line { color:#666; font-size: 14px; }
+    .chips { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+    .chip { font-size:12px; padding:4px 8px; border-radius:999px; background:#f1f1f5; }
+    .controls {
+      display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:8px 0 12px;
+    }
+    .controls button, .controls .switch {
+      padding:8px 10px; border:1px solid #ddd; border-radius:8px; background:#fff; cursor:pointer;
+    }
+    .controls .switch { display:flex; align-items:center; gap:6px; }
+    .notice {
+      font-size:13px; color:#777; margin-top:2px;
+    }
+    .player-wrap { position:relative; border-radius:10px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+    /* 잠금 오버레이 */
+    .lock-overlay {
+      position:absolute; inset:0; background:rgba(0,0,0,0.0);
+      display:none; z-index:10;
+    }
+    .lock-overlay.active { display:block; }
+    .lock-hint {
+      position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+      background:rgba(0,0,0,0.6); color:#fff; padding:6px 10px; border-radius:8px; font-size:12px;
+    }
+
+    .next-preview { margin-top:10px; font-size:14px; color:#444; }
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; border:1px solid #ddd; border-radius:6px; padding:1px 4px; background:#f9f9fb; font-size:12px; }
   </style>
 </head>
 <body>
-  <!-- 상단바 (기존 톤 유지) -->
-  <header id="topbar">
-    <div class="brand">
-      <a href="./" aria-label="홈으로"><img class="brand-logo" src="image/kidsani_r_side.png" alt="KidsAni"/></a>
-    </div>
-    <div class="right" style="position:relative;">
-      <a id="signupLink" class="link" href="signup.html">Sign up</a>
-      <a id="signinLink" class="link" href="signin.html">Sign in</a>
-      <span id="welcome" class="welcome"></span>
-      <button id="menuBtn" class="icon" aria-label="menu">三</button>
-      <div id="dropdownMenu" class="dropdown hidden" role="menu" aria-hidden="true">
-        <button id="btnAbout" type="button">KidsAni는…</button>
-        <button id="btnSignOut" type="button">Sign out</button>
-        <button id="btnList" type="button">영상목록</button>
-        <button id="btnGoUpload" class="menu-strong" type="button">추천영상등록</button>
-      </div>
+  <!-- 상단바(기존 초기버전 기준 유지) -->
+  <header class="k-top">
+    <a href="index.html" style="display:flex;align-items:center;gap:8px;text-decoration:none;">
+      <img class="brand-logo" src="image/copytube_logo_side.png" alt="KidsAni">
+      <strong style="color:#111;">KidsAni</strong>
+    </a>
+    <div style="margin-left:auto; display:flex; gap:8px;">
+      <a href="index.html" class="btn-link">카테고리</a>
+      <a href="manage-uploads.html" class="btn-link">내영상관리</a>
+      <a href="upload.html" class="btn-link">등록</a>
+      <a href="about.html" class="btn-link">소개</a>
     </div>
   </header>
 
-  <main>
-    <div class="player-wrap" id="playerWrap">
-      <div id="player"></div>
-    </div>
-
-    <div class="controls">
-      <button id="btnPrev" class="btn" type="button">◀ 이전</button>
-      <div class="right-ctrls">
-        <button id="btnMute" class="mute-btn" type="button" aria-pressed="true">🔇 음소거</button>
-        <button id="btnNext" class="btn" type="button">다음 ▶</button>
+  <main id="watch">
+    <div class="meta">
+      <div>
+        <div class="title" id="v-title">...</div>
+        <div class="series-line" id="v-series">시리즈 정보 없음</div>
+        <div class="chips" id="v-chips"></div>
+      </div>
+      <div style="text-align:right;">
+        <div class="notice">단축키: <span class="kbd">K</span> 재생/일시정지, <span class="kbd">J/L</span> -/+10s, <span class="kbd">M</span> 음소거, <span class="kbd">,</span>/<span class="kbd">.</span> 속도</div>
       </div>
     </div>
 
-    <div class="title" id="title">(제목 없음)</div>
-    <div class="chips" id="chips"></div>
-    <div class="meta" id="meta"></div>
+    <div class="controls">
+      <button id="btn-prev" disabled>⟵ 이전 화</button>
+      <button id="btn-next" disabled>다음 화 ⟶</button>
+
+      <label class="switch">
+        <input type="checkbox" id="toggle-autonext"> 자동 다음화
+      </label>
+
+      <label class="switch">
+        <input type="checkbox" id="toggle-lock"> 화면잠금
+      </label>
+
+      <button id="btn-full">전체화면</button>
+      <button id="btn-mute">음소거</button>
+      <button id="btn-speed">배속 1.0×</button>
+    </div>
+
+    <div class="player-wrap">
+      <div id="player"></div>
+      <div class="lock-overlay" id="lock">
+        <div class="lock-hint">잠금 해제하려면 다시 토글하세요</div>
+      </div>
+    </div>
+
+    <div class="next-preview" id="next-preview"></div>
   </main>
 
-  <!-- 공통 모듈 -->
+  <!-- Firebase 모듈 초기화(프로젝트 내 파일) -->
   <script type="module" src="js/firebase-init.js"></script>
   <script type="module" src="js/auth.js"></script>
 
-  <!-- YouTube Iframe API (이 페이지에서만 사용) -->
+  <!-- YouTube IFrame API -->
   <script src="https://www.youtube.com/iframe_api"></script>
 
   <!-- 페이지 스크립트 -->
-  <script type="module" src="js/watch.js?v=0.1.1-kidsani"></script>
+  <script type="module" src="js/watch.js"></script>
 </body>
 </html>
-<!-- end of watch.html (v0.1.1-kidsani) -->
