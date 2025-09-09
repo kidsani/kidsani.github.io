@@ -1,11 +1,9 @@
-// js/upload.js (KidsAni v0.3.0)
-// - 다중 URL 등록, 붙여넣기 지원
-// - 개인자료: 이름 변경 + 로컬 저장 (서버 미사용)
-// - 일반: 최대 3개 카테고리
-// - 시리즈/개인자료: 단독 등록 (다른 카테고리와 혼합 불가)
-// - YouTube Data API (있으면 사용)로 시리즈 영상의 업로드시간(ytPublishedAt) 조회 → seriesSortAt = ytPublishedAt || createdAt
-// - 문서 ID = ytid (전역 중복 방지). 다른 소유자가 이미 등록한 경우 건너뜀.
-// - 상단바/드롭다운, 오른쪽 스와이프 → index 이동
+// js/upload.js (KidsAni v0.3.4)
+// - DOM 준비 후 boot()에서만 초기화 (렌더/리스너 단일화)
+// - catsBox 중복 선언 제거
+// - onAuthStateChanged 단일 인자 호출(래퍼와 호환)
+// - 나머지 기능 유지
+
 console.log(new URL('./firebase-init.js', import.meta.url).href);
 
 import { auth, db } from './firebase-init.js';
@@ -34,47 +32,6 @@ const btnNick    = $('#btnNick');
 
 function openDropdown(){ dropdown?.classList.remove('hidden'); requestAnimationFrame(()=> dropdown?.classList.add('show')); }
 function closeDropdown(){ dropdown?.classList.remove('show'); setTimeout(()=> dropdown?.classList.add('hidden'), 180); }
-
-// ===== DOM Ready 이후에만 초기화 =====
-let catsBox; // 전역 참조
-
-function boot() {
-  // DOM Element 확보
-  catsBox = document.querySelector('#cats');
-  if (!catsBox) {
-    setMsg('#cats 컨테이너가 없습니다.'); 
-    return;
-  }
-
-  // Auth UI 토글 (기존 로직 그대로 이동)
-  onAuthStateChanged(auth, (user) => {
-    const loggedIn = !!user;
-    const $ = (s)=>document.querySelector(s);
-    const signupLink = $('#signupLink');
-    const signinLink = $('#signinLink');
-    const welcome    = $('#welcome');
-
-    signupLink?.classList.toggle('hidden', loggedIn);
-    signinLink?.classList.toggle('hidden', loggedIn);
-    if (welcome) welcome.textContent = loggedIn ? `Welcome! ${user.displayName || '회원'}` : '';
-    // 드롭다운 닫기 함수가 있다면 필요 시 호출
-    try { if (typeof closeDropdown === 'function') closeDropdown(); } catch {}
-  });
-
-  // 카테고리 렌더 (기존 renderCats() 호출을 여기로 이동)
-  renderCats();
-
-  // 등록 버튼 핸들러 (기존 addEventListener 두 줄을 여기로 이동)
-  document.querySelector('#btnSubmitTop')?.addEventListener('click', submitAll);
-  document.querySelector('#btnSubmitBottom')?.addEventListener('click', submitAll);
-}
-
-// DOMContentLoaded 후에 실행
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', boot);
-} else {
-  boot();
-}
 
 menuBtn?.addEventListener('click',(e)=>{ e.stopPropagation(); dropdown?.classList.contains('hidden') ? openDropdown() : closeDropdown(); });
 document.addEventListener('pointerdown',(e)=>{ if(dropdown?.classList.contains('hidden')) return; if(!e.target.closest('#dropdownMenu,#menuBtn')) closeDropdown(); }, true);
@@ -124,7 +81,7 @@ const isSeriesVal = (v)=> SERIES_VALUES.has(v);
 const isPersonalVal = (v)=> v==='personal1' || v==='personal2';
 
 /* ------- 카테고리 렌더 (DOM API) ------- */
-const catsBox = $('#cats');
+let catsBox; // 단일 선언만 유지
 
 function renderCats(){
   if(!Array.isArray(CATEGORY_GROUPS) || !CATEGORY_GROUPS.length){
@@ -244,7 +201,6 @@ function renderCats(){
     });
   });
 }
-renderCats();
 
 /* ------- URL 유틸 ------- */
 const urlsBox = $('#urls');
@@ -266,7 +222,6 @@ async function fetchTitleById(id){
   }catch{ return ''; }
 }
 function parseISODurationToSec(iso){
-  // PT#H#M#S
   if(!iso || typeof iso!=='string') return null;
   const re = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/i;
   const m = iso.match(re);
@@ -279,8 +234,7 @@ function parseISODurationToSec(iso){
 const YT_API_KEY = (typeof window!=='undefined' && window.YT_API_KEY) ? String(window.YT_API_KEY) : '';
 
 async function fetchYouTubeBatchMeta(ids){
-  // ids: 최대 50개
-  const result = new Map(); // id -> { title, channelTitle, publishedAt, durationSec }
+  const result = new Map();
   if(!ids.length) return result;
 
   if(!YT_API_KEY){
@@ -405,7 +359,7 @@ async function submitAll(){
     if(normals.length===0){ setMsg('카테고리를 최소 1개 선택해 주세요.'); return; }
     if(normals.length>3){ setMsg('카테고리는 최대 3개까지 선택 가능합니다.'); return; }
   }else{
-    // 시리즈 단독: 정확히 1개로 고정
+    // 시리즈 단독: 정확히 1개
     if(seriesSel.length!==1){ setMsg('시리즈는 한 번에 1개만 선택할 수 있습니다.'); return; }
   }
 
@@ -428,12 +382,10 @@ async function submitAll(){
   let metaMap = new Map();
   if(seriesSel.length===1){
     const ids = Array.from(idSet);
-    // 50개씩 배치
     metaMap = new Map();
     for(let i=0;i<ids.length;i+=50){
       const batch = ids.slice(i, i+50);
       const m = await fetchYouTubeBatchMeta(batch);
-      // 합치기
       for(const [k,v] of m.entries()) metaMap.set(k,v);
     }
   }
@@ -496,19 +448,14 @@ async function submitAll(){
       if(typeof durationSec === 'number') baseData.durationSec = durationSec;
       if(ytPublishedAt) baseData.ytPublishedAt = ytPublishedAt;
 
-      // seriesSortAt: 등록순(= 유튜브 업로드시각) 우선, 없으면 createdAt(서버)
-      // 새 문서면 createdAt 넣음, 기존 문서면 유지
+      // seriesSortAt: 유튜브 업로드시각 우선, 없으면 createdAt
       if(!snap.exists()){
         baseData.createdAt = serverTimestamp();
       }
       if(isSeries){
         baseData.seriesSortAt = ytPublishedAt || serverTimestamp();
       }
-console.log('WRITE payload', {
-  path: `videos/${id}`,
-  uid: auth.currentUser.uid,
-  data: baseData
-});
+
       await setDoc(ref, baseData, { merge: true });
       ok++;
     }catch(e){
@@ -521,9 +468,6 @@ console.log('WRITE payload', {
   setMsg(`완료: 성공 ${ok}건, 건너뜀 ${skip}건, 실패 ${fail}건`);
   if(ok){ urlsBox.value=''; document.querySelectorAll('.cat:checked').forEach(c=> c.checked=false); }
 }
-
-$('#btnSubmitTop')   ?.addEventListener('click', submitAll);
-$('#btnSubmitBottom')?.addEventListener('click', submitAll);
 
 /* ===================== */
 /* Slide-out CSS (단순형/백업용) */
@@ -643,3 +587,28 @@ $('#btnSubmitBottom')?.addEventListener('click', submitAll);
   // upload: 오른쪽으로 스와이프하면 index로
   initDragSwipe({ goRightHref: 'index.html', threshold:60, slop:45, timeMax:700, feel:1.0, deadZoneCenterRatio: 0.15 });
 })();
+
+/* ===== DOM Ready 이후에만 초기화 ===== */
+function boot() {
+  catsBox = document.querySelector('#cats');
+  if (!catsBox) { setMsg('#cats 컨테이너가 없습니다.'); return; }
+
+  onAuthStateChanged((user) => {
+    const loggedIn = !!user;
+    signupLink?.classList.toggle('hidden', loggedIn);
+    signinLink?.classList.toggle('hidden', loggedIn);
+    if (welcome) welcome.textContent = loggedIn ? `Welcome! ${user.displayName || '회원'}` : '';
+    try { if (typeof closeDropdown === 'function') closeDropdown(); } catch {}
+  });
+
+  renderCats();
+
+  document.querySelector('#btnSubmitTop')?.addEventListener('click', submitAll);
+  document.querySelector('#btnSubmitBottom')?.addEventListener('click', submitAll);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
